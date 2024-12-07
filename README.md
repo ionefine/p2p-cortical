@@ -1,5 +1,3 @@
-# p2p-cortical
-====================================================================
 p2p-Cortical: A model of cortical electronic prosthetic technologies
 ====================================================================
 This code implements computational model or ‘virtual patient’, based on the neurophysiological architecture of visual cortex, which successfully predicts the perceptual experience of participants across a wide range of previously published human cortical stimulation studies describing the location, size, brightness and spatiotemporal shape of electrically induced percepts in humans. 
