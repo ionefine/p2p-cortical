@@ -10,8 +10,6 @@
 clear
 clear all
 
-
-
 % fix the random number generator. This affects the ocular dominance/orientation maps
 rng(1171960)
 
@@ -22,18 +20,39 @@ rng(1171960)
 % https://doi.org/10.1152/jn.00126.2006
 % c.I_k = 1000;
 c.I_k = 6.75;
-%c.I_k = 1000;
 
-% define pulse train
+%% define trials 
+
+% define pulse train for 3 different trials
 tp = p2p_c.define_temporalparameters(); % define the temporal model
 
-% define trial parameters
-trl.amp = 60; trl.freq = 200; % amplitude, frequency
-trl.pw = 2*10^(-4); trl.dur= .8; %pulse width, pulse duration 
+% required because of array constraints
+trl_template = p2p_c.define_trial(tp);  % start with a clean, scalar struct
+trl = repmat(trl_template, 1, 3);       % proper array of structs with all fields
 
-% define entire pulse train waveform for trial
-trl = p2p_c.define_trial(tp,trl);  
+% define values for three trials
+trl(1).amp = 20; trl(1).freq = 100; trl(1).dur = 0.8; trl(1).pw = 2*10^(-4);
+trl(2).amp = 50; trl(2).freq = 200; trl(2).dur = 0.8; trl(2).pw = 2*10^(-4);
+trl(3).amp = 70; trl(3).freq = 300; trl(3).dur = 0.8; trl(3).pw = 2*10^(-4);
 
+
+for i = 1:3
+    trl(i) = p2p_c.define_trial(tp, trl(i));
+end
+
+% plot pulse trains for each of the three trials
+figure;
+for i = 1:3
+    subplot(1, 3, i); % 1 row, 3 columns
+    plot(trl(i).pt);
+    title(['Pulse Train for Trial ', num2str(i)]);
+    xlabel('Time (samples)');
+    ylabel('Amplitude');
+end
+sgtitle('Pulse Trains for All Trials');
+
+
+%% define electrode array
 % sampling of cortical and visual fields
 v.pixperdeg = 24;  % visual field map sampling
 c.pixpermm = 24;   % resolution of electric field sampling
@@ -77,42 +96,46 @@ c = p2p_c.define_cortex(c); % define the properties of the cortical map
 
    
 % create electrode array 
-array = create_array(c.e.x,  c.e.y);
+array = create_array(c.e.x,  c.e.y); 
 plot_array(array); % plot array 
 
 % allocate array to store generated phosphenes for each electrode image and
 % electric field image
-all_e_img = uint8(ones(size(v.X,1), size(v.X, 2), length(array)));
-all_e_elec = uint8(ones(size(c.X,1), size(c.X, 2), length(array)));
+all_e_img = uint8(ones(size(v.X,1), size(v.X, 2), length(array) * 3));
 
-c.e = array; % list of electrodes
+%c.e = array; % list of electrodes
 
-v = p2p_c.c2v_define_electrodes(c,v); % convert electrode locations from cortex to visual space
-c = p2p_c.define_electrodes(c, v); % complete properties for each electrode in cortical space
-c = p2p_c.generate_ef(c); % generate map of the electric field for each electrode on cortical surface
+%% generate repsonse for each electrode for all three trials
+counter = 1;
+for e = 1:length(array)
+    if mod(e, 10)==0
+        disp(['on electrode ', num2str(e), ' out of ', num2str(length(array))]);
+    end
+    c.e.x = array(e).x; c.e.y = array(e).y; c.e.radius =  array(e).radius;
+    v = p2p_c.c2v_define_electrodes(c,v); % convert electrode location from cortex to visual space
+    c = p2p_c.define_electrodes(c, v); % complete properties for each electrode in cortical space
 
-v = p2p_c.generate_corticalelectricalresponse(c, v);  % create rf map for each electrode
+    c = p2p_c.generate_ef(c); % generate map of the electric field for each electrode on cortical surface
 
-trl_array = p2p_c.generate_phosphene(v, tp, trl); % generate phosphene for electrode
+    % generate percepts
+    v = p2p_c.generate_corticalelectricalresponse(c, v);  % create rf map for each electrode
+    trl_array = p2p_c.generate_phosphene_multiple(v, tp, trl); % generate phosphene for electrode
 
-for e = 1:length(array)   
-    img = mean(trl_array(e).max_phosphene, 3);
-    img = img./max(abs(img(:))); % normalize so max is 1
-    img = (img+.5)*127; %  scale
-    all_e_img(:,:, e) = uint8(img); % save the image in case you want to plot more than one electrode at a time
-    all_e_elec(:,:, e) = uint8(c.e(e).ef * 256);
+    for e2 = 1:length(trl_array)
+    
+        img = mean(trl_array(e2).max_phosphene, 3);
+        all_e_img(:,:, counter) = uint8(img); % save the image in case you want to plot more than one electrode at a time
+        counter = counter + 1;       
+    end
 end
 
+plot_img_subset(all_e_img, 12, 'Phosphenes from 3 trials', 3);
 
-% plot subeset of images in grid
-plot_img_subset(all_e_elec, 16, 'First 16 Electric Fields');
-plot_img_subset(all_e_img, 16, 'First 16 Phosphenes');
 
 % save video file of image arrays
-plot_movie(all_e_elec, 'electric.avi')
-plot_movie(all_e_img, 'phosphenes.avi')
-
-save('RFs4ML');
+%plot_movie(all_e_img, 'phosphenes.avi')
+%
+%save('RFs4ML');
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -131,33 +154,45 @@ end
 function e = create_array(xoffset, yoffset)
 % Here we are simulating a high density array with small electrodes
 % the array has varying sizes of electrode
-% 21 x 21 = 441 electrodes
+% currently creates 4 electrodes
 e2e = 0.5; % electrode to electrode distances
 ct = 1;
-for r = -10:10
-    for c = -10:10
+for r = 0:1
+    for c = 0:1
         e(ct).y = (r*e2e) + yoffset;
         e(ct).x = (c*e2e) + xoffset;
-        e(ct).radius = .01;
+        e(ct).radius = .001;
         ct = ct+1;
     end
 end
 end
 
-function e = plot_img_subset(all_img, n_plot, ttl)
-    % plot subest of 3D phosphene image array
-    % all_img: array images to plot
+function plot_img_subset(all_img, n_plot, ttl, trials_per_electrode)
+    % plot subset of 3D phosphene image array
+    % all_img: 3D array of images (X × Y × num_images)
     % n_plot: number of images to plot
     % ttl: overall plot title
-    
+    % trials_per_electrode: how many trials per electrode
+
+    % determine subplot layout
+    n_cols = ceil(sqrt(n_plot));
+    n_rows = ceil(n_plot / n_cols);
+
     figure;
-    for e = 1:n_plot
-        subplot(4, 4, e);
-        imshow(all_img(:,:,e), []);
-        title(['Electrode ' num2str(e)]);
+    for i = 1:n_plot
+        subplot(n_rows, n_cols, i);
+        imshow(all_img(:,:,i), []);
+        
+        % Determine electrode and trial number
+        electrode_num = ceil(i / trials_per_electrode);
+        trial_num = mod(i - 1, trials_per_electrode) + 1;
+
+        title(['Electrode ' num2str(electrode_num) ', Trial ' num2str(trial_num)]);
     end
     sgtitle(ttl); 
 end
+
+
 
 function plot_movie(all_img, filename, framerate)
     % generates a movie from img array
@@ -182,10 +217,5 @@ function plot_movie(all_img, filename, framerate)
     close(v);
     disp(['Saved movie to ', filename]);
 end
-
-
-
-
-
 
 

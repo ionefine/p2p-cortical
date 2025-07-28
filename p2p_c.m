@@ -12,7 +12,6 @@
 classdef p2p_c
     methods(Static)
         %% definitions - temporal properties
-
         function trl = define_trial(tp, varargin)
             % creates a pulse train for a given trial
             % takes as input:
@@ -426,17 +425,17 @@ classdef p2p_c
             if ~isfield(c, 'rfmodel')
                 c.rftype = 'ringach';
             end
-              
+
             % generates the sum of weighted receptive fields activated by an electrode
             % normalized so the max is 1
             idx = 1:length(c.e);
             for ii = 1:length(idx) % for each electrode
-               
+
                 % get ef and position of current electrode
                 ef = double(c.e(ii).ef);
                 ex = c.e(ii).x;
                 ey = c.e(ii).y;
-               
+
                 if min(ex)-1<min(c.X(:)) || max(ex)+1>max(c.X(:)) ... 
                         || min(ey)-1<min(c.Y(:))  ||  max(ey)+1>max(c.Y(:))
                     errordlg('Electrode is either outside or too close to the edge of the cortical sheet');
@@ -465,7 +464,7 @@ classdef p2p_c
                     RF_all = p2p_c.generate_corticalcell(ef_vals(valid_pix), valid_pix, c, v);  % [y, x, eye, polarity, nPix]
 
                     for p = 1:length(valid_pix) % for valid each cortical location:
-                       
+
                         % progress logging
                         %if pixNum>ctNum*2 && (pixNum/ctNum == round(pixNum/ctNum))
                           %  per =round(100*pixNum/length(c.X(:)));
@@ -478,7 +477,7 @@ classdef p2p_c
                         if any(isnan(RF(:)))
                             disp('wtf')
                         end
-                         
+
                         % accumulate ON and OFF components
                         rfmap(:, :, 1)  =   rfmap(:, :, 1) + RF(:, :, 1);
                         rfmap(:, :, 2)  =   rfmap(:, :, 2) + RF(:, :, 2);  
@@ -540,7 +539,7 @@ classdef p2p_c
         %     end
         %     v.target.t = t;
         % end
-
+        % 
         % function G = Gauss_2D(v,x0,y0,theta,sigma_x,sigma_y)
         %     Generates oriented 2D Gaussian on meshgrid v.X,v.Y
         %     aa = cos(theta)^2/(2*sigma_x^2) + sin(theta)^2/(2*sigma_y^2);
@@ -548,7 +547,7 @@ classdef p2p_c
         %     cc = sin(theta)^2/(2*sigma_x^2) + cos(theta)^2/(2*sigma_y^2);
         %     G = exp( - (aa*(v.X-x0).^2 + 2*bb*(v.X-x0).*(v.Y-y0) + cc*(v.Y-y0).^2));
         % end
-
+        % 
         function RF = generate_corticalcell(ef, pix_idx, c, v)
             try
                 % Get pixel-wise parameters
@@ -558,68 +557,68 @@ classdef p2p_c
                 theta = pi - c.ORmap(pix_idx);  % [nPix x 1]
                 sigma_x = c.RFsizemap(pix_idx) * c.ar;
                 sigma_y = c.RFsizemap(pix_idx);
-        
+
                 X = v.X; Y = v.Y;
                 [nY, nX] = size(X);
                 nPix = numel(pix_idx);
-        
+
                 RF = zeros(nY, nX, 2, 2, nPix);  % Preallocate for Ringach
                 model = c.rfmodel;
-        
+
                 % Repeat coordinate grid
                 Xr = reshape(X, 1, 1, []); Yr = reshape(Y, 1, 1, []);
-        
+
                 for p = 1:nPix
                     dx = X - x0(p); dy = Y - y0(p);
-        
+
                     aa = cos(theta(p))^2 / (2*sigma_x(p)^2) + sin(theta(p))^2 / (2*sigma_y(p)^2);
                     bb = -sin(2*theta(p)) / (4*sigma_x(p)^2) + sin(2*theta(p)) / (4*sigma_y(p)^2);
                     cc = sin(theta(p))^2 / (2*sigma_x(p)^2) + cos(theta(p))^2 / (2*sigma_y(p)^2);
-        
+
                     switch model
                         case 'scoreboard'
                             G = ef(p) * exp(-((dx.^2)/0.0001 + (dy.^2)/0.00001));
                             RF(:, :, 1, 1, p) = G;
                             RF(:, :, 2, 1, p) = G;
-        
+
                         case 'smirnakis'
                             G = ef(p) * exp(-(aa*dx.^2 + 2*bb*dx.*dy + cc*dy.^2));
                             G = G ./ sum(G(:));
                             RF(:, :, 1, 1, p) = od(p) * G;
                             RF(:, :, 2, 1, p) = (1 - od(p)) * G;
-        
+
                         case 'ringach'
                             tmp = exp(-(aa*dx.^2 + 2*bb*dx.*dy + cc*dy.^2));
                             A = sqrt(sum(tmp(:) > 0.2) / v.pixperdeg^2);
                             d = c.DISTmap(pix_idx(p)) * A;
-        
+
                             wplus = c.ONOFFmap(pix_idx(p));
                             wminus = 1 - wplus;
-        
+
                             x_on = x0(p) - (d / 2) * cos(theta(p));
                             y_on = y0(p) + (d / 2) * sin(theta(p));
                             x_off = x0(p) + (d / 2) * cos(theta(p));
                             y_off = y0(p) - (d / 2) * sin(theta(p));
-        
+
                             hplus_on = exp(-(aa*(X - x_on).^2 + 2*bb*(X - x_on).*(Y - y_on) + cc*(Y - y_on).^2));
                             hplus_off = exp(-(aa*(X - x_off).^2 + 2*bb*(X - x_off).*(Y - y_off) + cc*(Y - y_off).^2));
-        
+
                             hplus_on = (hplus_on ./ max(abs(hplus_on(:)))) * wplus;
                             hplus_off = (hplus_off ./ abs(max(hplus_off(:)))) * wminus * c.onoff_ratio;
-        
+
                             hminus_off = -0.4 * hplus_off;
                             hminus_on = -0.4 * hplus_on;
-        
+
                             excitatory = hplus_on - c.onoff_ratio * hplus_off;
                             inhibitory = hminus_on - c.onoff_ratio * hminus_off;
-        
+
                             RF(:, :, 1, 1, p) = od(p) * ef(p) * excitatory;
                             RF(:, :, 2, 1, p) = (1 - od(p)) * ef(p) * excitatory;
                             RF(:, :, 1, 2, p) = od(p) * ef(p) * inhibitory;
                             RF(:, :, 2, 2, p) = (1 - od(p)) * ef(p) * inhibitory;
                     end
                 end
-        
+
             catch ME
                 warning('Falling back to per-pixel loop due to memory constraints or error: %s', ME.message);
                 RF = zeros(size(v.X,1), size(v.X,2), 2, 2, numel(pix_idx));
@@ -629,10 +628,99 @@ classdef p2p_c
             end
         end
 
+        function [trl_array,v] = generate_phosphene_multiple(v, tp, trl_array)
+        % written 7/24/24 by ES
+        % arguments : 
+        % v - struct of visual space information
+        % tp - temporal parameters
+        % trl_array - array of trial parameters struct
+        %
+        % returns: array of phosphenes based on those different trials
+
+        % Ensure all fields that will be added exist in trl
+            required_fields = {'ptid', 'spikestrength', 'max_phosphene', ...
+                   'sim_area', 'ellipse', 'sim_brightness'};
+     
+            for f = 1:length(required_fields)
+                field = required_fields{f};
+                for i = 1:length(trl_array)
+                    if ~isfield(trl_array(i), field)
+                         trl_array(i).(field) = [];  % initialize with empty
+                    end
+                end
+            end
+
+            % for each trial struct create phosphene produced by
+            % stimulating electrode
+            for i = 1:length(trl_array)
+                 if isnan(trl_array(i).freq)
+                    trl_array(i).max_phosphene = v.e(trl_array(i).e).rfmap; trl_array(i).spikestrength = 1; % the scaling due to current integration
+                 else
+                    trl_array(i) = p2p_c.convolve_model(tp, trl_array(i));
+                    trl_array(i).max_phosphene = v.e(trl_array(i).e).rfmap.*max(trl_array(i).spikestrength);
+                 end
+
+                 % calculate the size of the image
+                 trl_array(i).sim_area = (1/v.pixperdeg.^2) * sum(trl_array(i).max_phosphene(:) > v.drawthr)/2; % calculated area of phosphene based on mean of left and right eyes
+                 if ~isempty(trl_array(i).max_phosphene)
+                    for ii=1:2 % left and right eye
+                        p = p2p_c.fit_ellipse_to_phosphene(trl_array(i).max_phosphene(:,:,ii)>v.drawthr,v);
+                        trl_array(i).ellipse(ii).x = p.x0;
+                        trl_array(i).ellipse(ii).y = p.y0;
+                        trl_array(i).ellipse(ii).sigma_x = p.sigma_x;
+                        trl_array(i).ellipse(ii).sigma_y = p.sigma_y;
+                        trl_array(i).ellipse(ii).theta = p.theta;
+                    end
+                    % what rule to use to translate phosphene image to brightness?
+                    beta = 6; % soft-max rule across pixels for both eyes
+                    trl_array(i).sim_brightness = ((1/v.pixperdeg.^2) * sum(trl_array(i).max_phosphene(:).^beta)^(1/beta));  % IF CHECK
+                else
+                    trl_array(i).sim_brightness = [];
+                end 
+            end         
+        end
+
+        function [trl,v] = generate_phosphene2(v, tp, trl)
+            % finds the phosphene trl.max_phosphene corresponding to the brightest moment in
+            % time and estimates trl.ellipse which represents the patient
+            % drawings
+            %
+            % commented 12/7/24 IF
+
+            if isnan(trl.freq)
+                trl.max_phosphene = v.e(trl.e).rfmap; trl.spikestrength = 1; % the scaling due to current integration
+            else
+                trl = p2p_c.convolve_model(tp, trl);
+                trl.max_phosphene = v.e(trl.e).rfmap.*max(trl.spikestrength);
+            end
+
+            % calculate the size of the image
+            trl.sim_area = (1/v.pixperdeg.^2) * sum(trl.max_phosphene(:) > v.drawthr)/2; % calculated area of phosphene based on mean of left and right eyes
+            if ~isempty(trl.max_phosphene)
+                for i=1:2 % left and right eye
+                    p = p2p_c.fit_ellipse_to_phosphene(trl.max_phosphene(:,:,i)>v.drawthr,v);
+                    trl.ellipse(i).x = p.x0;
+                    trl.ellipse(i).y = p.y0;
+                    trl.ellipse(i).sigma_x = p.sigma_x;
+                    trl.ellipse(i).sigma_y = p.sigma_y;
+                    trl.ellipse(i).theta = p.theta;
+                end
+                % what rule to use to translate phosphene image to brightness?
+                beta = 6; % soft-max rule across pixels for both eyes
+                trl().sim_brightness = ((1/v.pixperdeg.^2) * sum(trl.max_phosphene(:).^beta)^(1/beta));  % IF CHECK
+            else
+                trl.sim_brightness = [];
+            end
+        end
+
         function [trl_array,v] = generate_phosphene(v, tp, trl)
             % finds the phosphene trl.max_phosphene corresponding to the brightest moment in
             % time and estimates trl.ellipse which represents the patient
             % drawings 
+            %
+            % This function will only produce phosphenes from a single
+            % trial. You can send in multiple electrodes and it will
+            % produce phosphenes all based on the same trial struct
             %
             % arguments : 
             % v - struct of visual space information
