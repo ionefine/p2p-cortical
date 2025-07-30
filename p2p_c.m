@@ -12,6 +12,139 @@
 classdef p2p_c
     methods(Static)
         %% definitions - temporal properties
+
+        function [v, c] = generate_corticalelectricalresponse(c, v)
+            % generates a percept by taking the sum of receptive fields activated by an electrode
+            % (weighed by the current at that point on the cortical surface).
+            % The percept is normalized so the max is 1
+            %
+            % commented 12/7/24 IF
+
+            if ~isfield(c, 'rfmodel')
+                c.rftype = 'ringach';
+            end
+            % generates the sum of weighted receptive fields activated by an electrode
+            % normalized so the max is 1
+            idx = 1:length(c.e);
+            for ii = 1:length(idx) % for each electrode
+                if min(c.e(idx(ii)).x)-1<min(c.X(:)) || max(c.e(idx(ii)).x)+1>max(c.X(:)) ...
+                        || min(c.e(idx(ii)).y)-1<min(c.Y(:))  ||  max(c.e(idx(ii)).y)+1>max(c.Y(:))
+                    errordlg('Electrode is either outside or too close to the edge of the cortical sheet');
+                else
+                    rfmap = zeros([size(v.X), 2]);
+                    ct = 0;
+                    ctNum = 500000;
+                    for pixNum = 1:length(c.X(:)) % for each cortical location
+                        if pixNum>ctNum*2 && (pixNum/ctNum == round(pixNum/ctNum))
+                            per =round(100*pixNum/length(c.X(:)));
+                            disp(['generating cortical electrical response ', num2str(per), '% complete']);
+                        end
+                        if ~isnan(c.cropPix(pixNum)) && abs(c.e(idx(ii)).ef(pixNum)) > c.efthr * 255
+                            RF = p2p_c.generate_corticalcell(double(c.e(idx(ii)).ef(pixNum)), pixNum, c, v);
+                            if ndims(RF)==4
+                                RF = squeeze(RF(:, :, :, 1)); % don't worry about inhibition
+                            end
+                            if ~isempty(find(isnan(RF(:)), 1))
+                                disp('wtf')
+                            end
+                            rfmap(:, :, 1)  =   rfmap(:, :, 1) + RF(:, :, 1);
+                            rfmap(:, :, 2)  =   rfmap(:, :, 2) + RF(:, :, 2);
+                            ct = ct+1;
+                        end
+                    end
+                    if ct <c.e(ii).radius*10
+                        if ct ==0;    disp('WARNING! No pixels passed ef threshold.');
+                        else;    disp('WARNING! Very few pixels passed ef threshold.');
+                        end
+                        disp(' try checking the following:');
+                        disp('lowering c.efthr or increase stimulation intensity');
+                        disp('checking location of electrodes relative visual map');
+                        disp('check the sampling resolution of cortex is not too low');
+                    end
+                    v.e(idx(ii)).rfmap = rfmap./max(abs(rfmap(:)));
+                end
+            end
+        end
+
+        function RF = generate_corticalcell(ef, pixNum, c, v)
+            x0 = c.v.X(pixNum); % x center
+            y0 = c.v.Y(pixNum); % y center
+            od = c.ODmap(pixNum);
+            theta = pi-c.ORmap(pixNum);  %orientation
+            sigma_x = c.RFsizemap(pixNum)*c.ar; % minor axis sd
+            sigma_y = c.RFsizemap(pixNum); % major axis sd
+
+            % calculates a rf for a given location. Usually 3d (x, y and
+            % eye) but for the ringach model it's 4d (x, y, eye,
+            % on/off)
+            if strcmp(c.rfmodel, 'scoreboard')
+                % scoreboard version
+                G = ef * exp(-( (v.X-x0).^2/(0.0001) + (v.Y-y0).^2/(.00001)));
+                RF(:, :, 1) = G;
+                RF(:, :, 2) = G;
+            elseif strcmp(c.rfmodel, 'smirnakis')
+                aa = cos(theta)^2/(2*sigma_x^2) + sin(theta)^2/(2*sigma_y^2);
+                bb = -sin(2*theta)/(4*sigma_x^2) + sin(2*theta)/(4*sigma_y^2);
+                cc = sin(theta)^2/(2*sigma_x^2) + cos(theta)^2/(2*sigma_y^2);
+                G = ef * exp( - (aa*(v.X-x0).^2 + 2*bb*(v.X-x0).*(v.Y-y0) + cc*(v.Y-y0).^2));
+                G = G./sum(G(:));
+                RF(:, :, 1)  = od*G;
+                RF(:, :, 2)  = (1-od)*G;
+            elseif strcmp(c.rfmodel, 'ringach')
+                % creating more complex RFs based on Mata and Ringach, 2004 Neurophysiology paper
+                % Spatial Overlap of ON and OFF Subregions and Its Relation to Response Modulation Ratio in Macaque Primary Visual Cortex
+                aa = cos(theta)^2/(2*sigma_x^2) + sin(theta)^2/(2*sigma_y^2);
+                bb = -sin(2*theta)/(4*sigma_x^2) + sin(2*theta)/(4*sigma_y^2);
+                cc = sin(theta)^2/(2*sigma_x^2) + cos(theta)^2/(2*sigma_y^2);
+
+                % calculate the area of of the on and off fields, which is
+                % needed to normalize d. on and off fields use the same
+                % oriented gaussian, only their central location and their
+                % amplitudes differ
+                tmp  = exp( -(aa*(v.X-x0).^2 + 2*bb*(v.X-x0).*(v.Y-y0) + cc*(v.Y-y0).^2));
+                A = sqrt((sum(tmp(:)>0.2)/v.pixperdeg.^2));
+                d = c.DISTmap(pixNum) * A; % select a random d value
+
+                % now create the real on and off fields, that are centered
+                % on different locations in space and have variable
+                % amplitudes
+                x_off = x0 + (d/2).*cos(theta); y_off = y0 - (d/2).*sin(theta);
+                x_on = x0 - (d/2).*cos(theta); y_on = y0 + (d/2).*sin(theta);
+
+                wplus = c.ONOFFmap(pixNum); % scales the on subunit:  hplus_on and hminus_on
+                wminus = 1-c.ONOFFmap(pixNum); % scales the off subunit: hplus_off and hminus_off
+
+                % on subunit for bright dots
+                hplus_on =  exp( - (aa*(v.X-x_on).^2 + 2*bb*(v.X-x_on).*(v.Y-y_on) + cc*(v.Y-y_on).^2));
+                hplus_on = hplus_on./max(abs(hplus_on(:))); % response to bright dots, from the on subunit
+                hplus_on = hplus_on * wplus;
+
+                % off subunit, suppression with dark dots
+                hplus_off = exp( - (aa*(v.X-x_off).^2 + 2*bb*(v.X-x_off).*(v.Y-y_off) + cc*(v.Y-y_off).^2));
+                hplus_off = hplus_off./abs(max(hplus_off(:))); % response to dark dots, from the off subunit
+                hplus_off = hplus_off *wminus * c.onoff_ratio;
+
+                hminus_off = -0.4 * hplus_off; % inhibitory response to bright dots, from the off subunit
+                hminus_on = -0.4 * hplus_on;% inhibitory response to dark  dots, from the on subunit
+
+                % add the off component for bright and dark dots, and scale relative
+                % amplitudes
+                % bright = hplus_on + hminus_off; % response to bright dots
+                % dark = hplus_off + hminus_on; % response to dark dots
+
+                excitatory = hplus_on  - c.onoff_ratio*hplus_off; %
+                inhibitory =hminus_on  - c.onoff_ratio*hminus_off ; % produces brightness where dark dots inhibiting
+
+                RF(:, :, 1, 1)  =  od*ef*excitatory; % excitatory response
+                RF(:, :, 2, 1)  =  (1-od)*ef*excitatory;
+
+                RF(:, :, 1, 2)  =  od*ef*inhibitory;
+                RF(:, :, 2, 2)  =  (1-od)*inhibitory;
+            else
+                error('c.rfmodel model not recognized')
+            end
+        end
+
         function trl = define_trial(tp, varargin)
             % creates a pulse train for a given trial
             % takes as input:
@@ -73,7 +206,7 @@ classdef p2p_c
                 % it's much faster
                 trl.pt = 1;
             else
-                if trl.ip == 0  % no interphase delay 
+                if trl.ip == 0  % no interoase delay 
                     on =  mod(trl.t,1/trl.freq) <=(trl.pw*2); % turn it on on
                     off = mod(trl.t-trl.pw,1/trl.freq) <=trl.pw & on;  % '& on' hack added by gmb;
                     tmp  = trl.amp.*(on-(2*off));
@@ -412,83 +545,83 @@ classdef p2p_c
             end
         end
 
-        function [v, c] = generate_corticalelectricalresponse(c, v)
-            % generates a percept for each electrode by taking the sum of receptive 
-            % fields activated by an electrode
-            % (weighed by the current at that point on the cortical surface).
-            % The percept is normalized so the max is 1
-            %
-            % commented 12/7/24 IF
-            % edited 6/27/25 ES
-
-            % set default model
-            if ~isfield(c, 'rfmodel')
-                c.rftype = 'ringach';
-            end
-
-            % generates the sum of weighted receptive fields activated by an electrode
-            % normalized so the max is 1
-            idx = 1:length(c.e);
-            for ii = 1:length(idx) % for each electrode
-
-                % get ef and position of current electrode
-                ef = double(c.e(ii).ef);
-                ex = c.e(ii).x;
-                ey = c.e(ii).y;
-
-                if min(ex)-1<min(c.X(:)) || max(ex)+1>max(c.X(:)) ... 
-                        || min(ey)-1<min(c.Y(:))  ||  max(ey)+1>max(c.Y(:))
-                    errordlg('Electrode is either outside or too close to the edge of the cortical sheet');
-                else
-                    % initialize rf map 
-                    rfmap = zeros([size(v.X), 2]);       
-                    ctNum = 500000;
-
-                   % identify valid cortical pixels for this electrode     
-                    ef_vals = ef(:);
-                    crop_vals = c.cropPix(:);
-                    valid_mask = ~isnan(crop_vals) & abs(ef_vals) > c.efthr * 255;
-                    valid_pix = find(valid_mask);
-                    ct = length(valid_pix);
-
-                    if ct <c.e(ii).radius*10
-                        if ct ==0;    disp('WARNING! No pixels passed ef threshold.');
-                        else;    disp('WARNING! Very few pixels passed ef threshold.');
-                        end
-                        disp(' try checking the following:');
-                        disp('lowering c.efthr or increase stimulation intensity');
-                        disp('checking location of electrodes relative visual map');
-                        disp('check the sampling resolution of cortex is not too low');
-                    end
-
-                    RF_all = p2p_c.generate_corticalcell(ef_vals(valid_pix), valid_pix, c, v);  % [y, x, eye, polarity, nPix]
-
-                    for p = 1:length(valid_pix) % for valid each cortical location:
-
-                        % progress logging
-                        %if pixNum>ctNum*2 && (pixNum/ctNum == round(pixNum/ctNum))
-                          %  per =round(100*pixNum/length(c.X(:)));
-                          %  disp(['generating cortical electrical response ', num2str(per), '% complete']);
-                        %end
-
-                        RF = squeeze(RF_all(:, :, :, :, p));  % [y, x, eye, polarity]                
-
-                        % sanity check 
-                        if any(isnan(RF(:)))
-                            disp('wtf')
-                        end
-
-                        % accumulate ON and OFF components
-                        rfmap(:, :, 1)  =   rfmap(:, :, 1) + RF(:, :, 1);
-                        rfmap(:, :, 2)  =   rfmap(:, :, 2) + RF(:, :, 2);  
-                    end
-
-                    % normalize
-                     v.e(idx(ii)).rfmap = rfmap./max(abs(rfmap(:)));
-                end                        
-            end
-        end
-
+        % function [v, c] = generate_corticalelectricalresponse(c, v)
+        %     % generates a percept for each electrode by taking the sum of receptive 
+        %     % fields activated by an electrode
+        %     % (weighed by the current at that point on the cortical surface).
+        %     % The percept is normalized so the max is 1
+        %     %
+        %     % commented 12/7/24 IF
+        %     % edited 6/27/25 ES
+        % 
+        %     % set default model
+        %     if ~isfield(c, 'rfmodel')
+        %         c.rftype = 'ringach';
+        %     end
+        % 
+        %     % generates the sum of weighted receptive fields activated by an electrode
+        %     % normalized so the max is 1
+        %     idx = 1:length(c.e);
+        %     for ii = 1:length(idx) % for each electrode
+        % 
+        %         % get ef and position of current electrode
+        %         ef = double(c.e(ii).ef);
+        %         ex = c.e(ii).x;
+        %         ey = c.e(ii).y;
+        % 
+        %         if min(ex)-1<min(c.X(:)) || max(ex)+1>max(c.X(:)) ... 
+        %                 || min(ey)-1<min(c.Y(:))  ||  max(ey)+1>max(c.Y(:))
+        %             errordlg('Electrode is either outside or too close to the edge of the cortical sheet');
+        %         else
+        %             % initialize rf map 
+        %             rfmap = zeros([size(v.X), 2]);       
+        %             ctNum = 500000;
+        % 
+        %            % identify valid cortical pixels for this electrode     
+        %             ef_vals = ef(:);
+        %             crop_vals = c.cropPix(:);
+        %             valid_mask = ~isnan(crop_vals) & abs(ef_vals) > c.efthr * 255;
+        %             valid_pix = find(valid_mask);
+        %             ct = length(valid_pix);
+        % 
+        %             if ct <c.e(ii).radius*10
+        %                 if ct ==0;    disp('WARNING! No pixels passed ef threshold.');
+        %                 else;    disp('WARNING! Very few pixels passed ef threshold.');
+        %                 end
+        %                 disp(' try checking the following:');
+        %                 disp('lowering c.efthr or increase stimulation intensity');
+        %                 disp('checking location of electrodes relative visual map');
+        %                 disp('check the sampling resolution of cortex is not too low');
+        %             end
+        % 
+        %             RF_all = p2p_c.generate_corticalcell(ef_vals(valid_pix), valid_pix, c, v);  % [y, x, eye, polarity, nPix]
+        % 
+        %             for p = 1:length(valid_pix) % for valid each cortical location:
+        % 
+        %                 % progress logging
+        %                 %if pixNum>ctNum*2 && (pixNum/ctNum == round(pixNum/ctNum))
+        %                   %  per =round(100*pixNum/length(c.X(:)));
+        %                   %  disp(['generating cortical electrical response ', num2str(per), '% complete']);
+        %                 %end
+        % 
+        %                 RF = squeeze(RF_all(:, :, :, :, p));  % [y, x, eye, polarity]                
+        % 
+        %                 % sanity check 
+        %                 if any(isnan(RF(:)))
+        %                     disp('wtf')
+        %                 end
+        % 
+        %                 % accumulate ON and OFF components
+        %                 rfmap(:, :, 1)  =   rfmap(:, :, 1) + RF(:, :, 1);
+        %                 rfmap(:, :, 2)  =   rfmap(:, :, 2) + RF(:, :, 2);  
+        %             end
+        % 
+        %             % normalize
+        %              v.e(idx(ii)).rfmap = rfmap./max(abs(rfmap(:)));
+        %         end                        
+        %     end
+        % end
+        % 
 
         % function [v, c] = generate_corticalvisualresponse_spatial(c, v)
         %     if ~isfield(c, 'rfmodel')
@@ -539,94 +672,94 @@ classdef p2p_c
         %     end
         %     v.target.t = t;
         % end
-        % 
-        % function G = Gauss_2D(v,x0,y0,theta,sigma_x,sigma_y)
-        %     Generates oriented 2D Gaussian on meshgrid v.X,v.Y
-        %     aa = cos(theta)^2/(2*sigma_x^2) + sin(theta)^2/(2*sigma_y^2);
-        %     bb = -sin(2*theta)/(4*sigma_x^2) + sin(2*theta)/(4*sigma_y^2);
-        %     cc = sin(theta)^2/(2*sigma_x^2) + cos(theta)^2/(2*sigma_y^2);
-        %     G = exp( - (aa*(v.X-x0).^2 + 2*bb*(v.X-x0).*(v.Y-y0) + cc*(v.Y-y0).^2));
-        % end
-        % 
-        function RF = generate_corticalcell(ef, pix_idx, c, v)
-            try
-                % Get pixel-wise parameters
-                x0 = c.v.X(pix_idx);      % [nPix x 1]
-                y0 = c.v.Y(pix_idx);      % [nPix x 1]
-                od = c.ODmap(pix_idx);    % [nPix x 1]
-                theta = pi - c.ORmap(pix_idx);  % [nPix x 1]
-                sigma_x = c.RFsizemap(pix_idx) * c.ar;
-                sigma_y = c.RFsizemap(pix_idx);
 
-                X = v.X; Y = v.Y;
-                [nY, nX] = size(X);
-                nPix = numel(pix_idx);
-
-                RF = zeros(nY, nX, 2, 2, nPix);  % Preallocate for Ringach
-                model = c.rfmodel;
-
-                % Repeat coordinate grid
-                Xr = reshape(X, 1, 1, []); Yr = reshape(Y, 1, 1, []);
-
-                for p = 1:nPix
-                    dx = X - x0(p); dy = Y - y0(p);
-
-                    aa = cos(theta(p))^2 / (2*sigma_x(p)^2) + sin(theta(p))^2 / (2*sigma_y(p)^2);
-                    bb = -sin(2*theta(p)) / (4*sigma_x(p)^2) + sin(2*theta(p)) / (4*sigma_y(p)^2);
-                    cc = sin(theta(p))^2 / (2*sigma_x(p)^2) + cos(theta(p))^2 / (2*sigma_y(p)^2);
-
-                    switch model
-                        case 'scoreboard'
-                            G = ef(p) * exp(-((dx.^2)/0.0001 + (dy.^2)/0.00001));
-                            RF(:, :, 1, 1, p) = G;
-                            RF(:, :, 2, 1, p) = G;
-
-                        case 'smirnakis'
-                            G = ef(p) * exp(-(aa*dx.^2 + 2*bb*dx.*dy + cc*dy.^2));
-                            G = G ./ sum(G(:));
-                            RF(:, :, 1, 1, p) = od(p) * G;
-                            RF(:, :, 2, 1, p) = (1 - od(p)) * G;
-
-                        case 'ringach'
-                            tmp = exp(-(aa*dx.^2 + 2*bb*dx.*dy + cc*dy.^2));
-                            A = sqrt(sum(tmp(:) > 0.2) / v.pixperdeg^2);
-                            d = c.DISTmap(pix_idx(p)) * A;
-
-                            wplus = c.ONOFFmap(pix_idx(p));
-                            wminus = 1 - wplus;
-
-                            x_on = x0(p) - (d / 2) * cos(theta(p));
-                            y_on = y0(p) + (d / 2) * sin(theta(p));
-                            x_off = x0(p) + (d / 2) * cos(theta(p));
-                            y_off = y0(p) - (d / 2) * sin(theta(p));
-
-                            hplus_on = exp(-(aa*(X - x_on).^2 + 2*bb*(X - x_on).*(Y - y_on) + cc*(Y - y_on).^2));
-                            hplus_off = exp(-(aa*(X - x_off).^2 + 2*bb*(X - x_off).*(Y - y_off) + cc*(Y - y_off).^2));
-
-                            hplus_on = (hplus_on ./ max(abs(hplus_on(:)))) * wplus;
-                            hplus_off = (hplus_off ./ abs(max(hplus_off(:)))) * wminus * c.onoff_ratio;
-
-                            hminus_off = -0.4 * hplus_off;
-                            hminus_on = -0.4 * hplus_on;
-
-                            excitatory = hplus_on - c.onoff_ratio * hplus_off;
-                            inhibitory = hminus_on - c.onoff_ratio * hminus_off;
-
-                            RF(:, :, 1, 1, p) = od(p) * ef(p) * excitatory;
-                            RF(:, :, 2, 1, p) = (1 - od(p)) * ef(p) * excitatory;
-                            RF(:, :, 1, 2, p) = od(p) * ef(p) * inhibitory;
-                            RF(:, :, 2, 2, p) = (1 - od(p)) * ef(p) * inhibitory;
-                    end
-                end
-
-            catch ME
-                warning('Falling back to per-pixel loop due to memory constraints or error: %s', ME.message);
-                RF = zeros(size(v.X,1), size(v.X,2), 2, 2, numel(pix_idx));
-                for k = 1:numel(pix_idx)
-                    RF(:, :, :, :, k) = p2p_c.generate_corticalcell(ef(k), pix_idx(k), c, v);
-                end
-            end
+        function G = Gauss_2D(v,x0,y0,theta,sigma_x,sigma_y)
+            %Generates oriented 2D Gaussian on meshgrid v.X,v.Y
+            aa = cos(theta)^2/(2*sigma_x^2) + sin(theta)^2/(2*sigma_y^2);
+            bb = -sin(2*theta)/(4*sigma_x^2) + sin(2*theta)/(4*sigma_y^2);
+            cc = sin(theta)^2/(2*sigma_x^2) + cos(theta)^2/(2*sigma_y^2);
+            G = exp( - (aa*(v.X-x0).^2 + 2*bb*(v.X-x0).*(v.Y-y0) + cc*(v.Y-y0).^2));
         end
+
+        % function RF = generate_corticalcell(ef, pix_idx, c, v)
+        %     try
+        %         % Get pixel-wise parameters
+        %         x0 = c.v.X(pix_idx);      % [nPix x 1]
+        %         y0 = c.v.Y(pix_idx);      % [nPix x 1]
+        %         od = c.ODmap(pix_idx);    % [nPix x 1]
+        %         theta = pi - c.ORmap(pix_idx);  % [nPix x 1]
+        %         sigma_x = c.RFsizemap(pix_idx) * c.ar;
+        %         sigma_y = c.RFsizemap(pix_idx);
+        % 
+        %         X = v.X; Y = v.Y;
+        %         [nY, nX] = size(X);
+        %         nPix = numel(pix_idx);
+        % 
+        %         RF = zeros(nY, nX, 2, 2, nPix);  % Preallocate for Ringach
+        %         model = c.rfmodel;
+        % 
+        %         % Repeat coordinate grid
+        %         Xr = reshape(X, 1, 1, []); Yr = reshape(Y, 1, 1, []);
+        % 
+        %         for p = 1:nPix
+        %             dx = X - x0(p); dy = Y - y0(p);
+        % 
+        %             aa = cos(theta(p))^2 / (2*sigma_x(p)^2) + sin(theta(p))^2 / (2*sigma_y(p)^2);
+        %             bb = -sin(2*theta(p)) / (4*sigma_x(p)^2) + sin(2*theta(p)) / (4*sigma_y(p)^2);
+        %             cc = sin(theta(p))^2 / (2*sigma_x(p)^2) + cos(theta(p))^2 / (2*sigma_y(p)^2);
+        % 
+        %             switch model
+        %                 case 'scoreboard'
+        %                     G = ef(p) * exp(-((dx.^2)/0.0001 + (dy.^2)/0.00001));
+        %                     RF(:, :, 1, 1, p) = G;
+        %                     RF(:, :, 2, 1, p) = G;
+        % 
+        %                 case 'smirnakis'
+        %                     G = ef(p) * exp(-(aa*dx.^2 + 2*bb*dx.*dy + cc*dy.^2));
+        %                     G = G ./ sum(G(:));
+        %                     RF(:, :, 1, 1, p) = od(p) * G;
+        %                     RF(:, :, 2, 1, p) = (1 - od(p)) * G;
+        % 
+        %                 case 'ringach'
+        %                     tmp = exp(-(aa*dx.^2 + 2*bb*dx.*dy + cc*dy.^2));
+        %                     A = sqrt(sum(tmp(:) > 0.2) / v.pixperdeg^2);
+        %                     d = c.DISTmap(pix_idx(p)) * A;
+        % 
+        %                     wplus = c.ONOFFmap(pix_idx(p));
+        %                     wminus = 1 - wplus;
+        % 
+        %                     x_on = x0(p) - (d / 2) * cos(theta(p));
+        %                     y_on = y0(p) + (d / 2) * sin(theta(p));
+        %                     x_off = x0(p) + (d / 2) * cos(theta(p));
+        %                     y_off = y0(p) - (d / 2) * sin(theta(p));
+        % 
+        %                     hplus_on = exp(-(aa*(X - x_on).^2 + 2*bb*(X - x_on).*(Y - y_on) + cc*(Y - y_on).^2));
+        %                     hplus_off = exp(-(aa*(X - x_off).^2 + 2*bb*(X - x_off).*(Y - y_off) + cc*(Y - y_off).^2));
+        % 
+        %                     hplus_on = (hplus_on ./ max(abs(hplus_on(:)))) * wplus;
+        %                     hplus_off = (hplus_off ./ abs(max(hplus_off(:)))) * wminus * c.onoff_ratio;
+        % 
+        %                     hminus_off = -0.4 * hplus_off;
+        %                     hminus_on = -0.4 * hplus_on;
+        % 
+        %                     excitatory = hplus_on - c.onoff_ratio * hplus_off;
+        %                     inhibitory = hminus_on - c.onoff_ratio * hminus_off;
+        % 
+        %                     RF(:, :, 1, 1, p) = od(p) * ef(p) * excitatory;
+        %                     RF(:, :, 2, 1, p) = (1 - od(p)) * ef(p) * excitatory;
+        %                     RF(:, :, 1, 2, p) = od(p) * ef(p) * inhibitory;
+        %                     RF(:, :, 2, 2, p) = (1 - od(p)) * ef(p) * inhibitory;
+        %             end
+        %         end
+        % 
+        %     catch ME
+        %         warning('Falling back to per-pixel loop due to memory constraints or error: %s', ME.message);
+        %         RF = zeros(size(v.X,1), size(v.X,2), 2, 2, numel(pix_idx));
+        %         for k = 1:numel(pix_idx)
+        %             RF(:, :, :, :, k) = p2p_c.generate_corticalcell(ef(k), pix_idx(k), c, v);
+        %         end
+        %     end
+        % end
 
         function [trl_array,v] = generate_phosphene_multiple(v, tp, trl_array)
         % written 7/24/24 by ES
@@ -707,7 +840,7 @@ classdef p2p_c
                 end
                 % what rule to use to translate phosphene image to brightness?
                 beta = 6; % soft-max rule across pixels for both eyes
-                trl().sim_brightness = ((1/v.pixperdeg.^2) * sum(trl.max_phosphene(:).^beta)^(1/beta));  % IF CHECK
+                trl.sim_brightness = ((1/v.pixperdeg.^2) * sum(trl.max_phosphene(:).^beta)^(1/beta));  % IF CHECK
             else
                 trl.sim_brightness = [];
             end
@@ -1975,6 +2108,8 @@ classdef p2p_c
             if nargin<4 || isempty(varargin{2});  figNum = 1;  else; figNum = varargin{2}; end
             if nargin<5 || isempty(varargin{3});  evalstr = '';      else;  evalstr = [varargin{3}]; end
 
+            figure(figNum); hold on             
+
             if isfield(c,'cropPix')
                 img(isnan(c.cropPix)) = NaN;
                 img = img + 2;
@@ -2088,19 +2223,30 @@ classdef p2p_c
         %     end
         % end
 
-        % function  err = (p,trl, v)fit_phosphene
-        %     % finds the standard deviation and mean of the best fitting
-        %     % 2D Gaussian, assumes circularity.
-        %     phos = mean(trl.max_phosphene, 3); phos = phos./max(phos(:));% average across the two eyes
-        %     pred = p2p_c.Gauss(p, v);  pred = pred./max(pred(:));
-        % 
-        %     err = sum((phos(:)-pred(:)).^2);
-        %     if p.sigma<0; err =err +  abs(p.sigma)*10.^6; end
-        % end
+        function  err = fit_phosphene(p,trl, v)
+            % finds the standard deviation and mean of the best fitting
+            % 2D Gaussian, assumes circularity.
+            %disp('--- fit_phosphene called ---')
+            %disp('Class of trl:')
+            %disp(class(trl))
+            %disp('Size of trl:')
+            %disp(size(trl))
 
-        % function out = Gauss(p,v)
-        %     out = exp(-((v.X-p.x).^2+(v.Y-p.y).^2)/(2*p.sigma^2));
-        % end
+            %if iscell(trl)
+             %   trl = trl{1};
+           % end
+            
+            phos = mean(trl.max_phosphene, 3);
+            phos = phos./max(phos(:));% average across the two eyes
+            pred = p2p_c.Gauss(p, v);  pred = pred./max(pred(:));
+
+            err = sum((phos(:)-pred(:)).^2);
+            if p.sigma<0; err =err +  abs(p.sigma)*10.^6; end
+        end
+
+        function out = Gauss(p,v)
+            out = exp(-((v.X-p.x).^2+(v.Y-p.y).^2)/(2*p.sigma^2));
+        end
 
 %         function [err,predcx,predcy,cx,cy] = fitElectrodeGrid(p,vx,vy)
 %             % Gives a fit of a projected set of phosphenes onto a 6x4
