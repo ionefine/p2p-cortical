@@ -1,7 +1,7 @@
 % Phosphene_Size_vs_Eccentricity
 %
-% simulates phosphene size as a function of
-% eccentricity and electrode size. This code is pretty slow, so the first time you run this,
+% simulates phosphene size as a function of eccentricity and electrode size. 
+% This code is pretty slow, so the first time you run this,
 % set the number of eccList and radList to 3, and the nSamp 3. Once you
 % know the code works you can change these
 %
