@@ -15,6 +15,7 @@
 clear
 close all
 
+
 %% Define eccentricties and radii to compare
 nSamp = 2; % we are going to re-estimate the size of the percept multiple times. Error bars pretty low with 25
 eccList = exp(linspace(log(.5), log(35), 3)); % the eccentricities of the electrodes
@@ -82,7 +83,6 @@ for rad = 1:length(radList)
                 p2p_c.plotretgrid(img, v, gray(256), 2, str); drawnow;
                 ct = ct+1;
             end
-        end
 
         % so when we have a nice clean phosphene you can just calculate the
         % values that are above drawing threshold. But for these messy
@@ -102,6 +102,12 @@ for rad = 1:length(radList)
         sigma(rad, ecc, r) = p.sigma;
         radius(rad, ecc, r) = radList(rad);
         eccentricity(rad, ecc, r) = eccList(ecc);
+
+        disp(r)
+        fprintf('sigma: %.4f\n', p.sigma);
+        disp(['sigma slice at r = ', num2str(r)]);
+        disp(sigma(:, :, r));
+        end
     end
 end
 
@@ -127,8 +133,7 @@ for rad = 1:length(radList)
         clist(rad,:), 'Color', clist(rad,:)); hold on
 
     % Add shaded error region (+/- 2 std)
-    sh = shadedErrorBar(eccList, mn_sigma(rad, :),  std_sigma(rad, :));   
-   
+    sh = shadedErrorBar(eccList, mn_sigma(rad, :),  std_sigma(rad, :));      
     sh.patch.FaceColor = clist(rad, :);
     sh.mainLine.Color = clist(rad, :);
     sh.edge(1).Color ='none';  sh.edge(2).Color = 'none';
