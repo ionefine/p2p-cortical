@@ -9,6 +9,7 @@
 % experiments.
 % 
 % 25/02/2023 moved into clean folder (IF)
+% % 4/08/2024 commented ES
 
 %% Set up standard trial definition 
 tp = p2p_c.define_temporalparameters();
