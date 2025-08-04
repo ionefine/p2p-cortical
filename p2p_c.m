@@ -1035,45 +1035,45 @@ classdef p2p_c
         %     end
         % end
         % 
-        % function [err, thresh] = loop_find_threshold(tp,T, varargin)
-        % 
-        %     %
-        %     % Runs the 'conv' model to get thresholds based on trials in the table 'T'.
-        %     % returns the SSE and thresholds.  Table must contain fields holding the
-        %     % following parameters for each trial:
-        %     % pw      pulse width (sec)
-        %     % dur     trial duration (sec)
-        %     % freq    pulse frequency (Hz)
-        %     % amp     amplitude at detection threshold
-        %     if ~isfield(tp, 'nReps')
-        %         tp.nReps = 12;
-        %     end
-        %     thresh = NaN(size(T,1), 1);
-        %     for i=1:size(T,1)
-        %         % define trial parameters based on values in the table
-        %         clear trl;  trl.pw = T.pw(i);   trl.amp = 1;    trl.dur = T.dur(i);     trl.freq = T.freq(i);   trl.simdur = 3; %sec
-        %         trl = p2p_c.define_trial(tp,trl);
-        % 
-        %         if nargin==2
-        %             thresh(i)= p2p_c.find_threshold(trl,tp);
-        %         elseif nargin ==3
-        %             thresh(i)= p2p_c.find_threshold(trl,tp, varargin{1});
-        %         end
-        %     end
-        % 
-        %     if strcmp('amp',T.Properties.VariableNames)
-        %         err = nansum((thresh-T.amp').^2);
-        %         disp(['err = ',  num2str(round(err, 3))]);
-        %     else
-        %         err = NaN;
-        %     end
-        % 
-        %     if isfield(tp,'experimentList')
-        %         for i = 1:length(tp.experimentList)
-        %             disp(sprintf('%10s: %g',tp.experimentList{i},tp.sc_in(i)));
-        %         end
-        %     end
-        % end
+        function [err, thresh] = loop_find_threshold(tp,T, varargin)
+
+            %
+            % Runs the 'conv' model to get thresholds based on trials in the table 'T'.
+            % returns the SSE and thresholds.  Table must contain fields holding the
+            % following parameters for each trial:
+            % pw      pulse width (sec)
+            % dur     trial duration (sec)
+            % freq    pulse frequency (Hz)
+            % amp     amplitude at detection threshold
+            if ~isfield(tp, 'nReps')
+                tp.nReps = 12;
+            end
+            thresh = NaN(size(T,1), 1);
+            for i=1:size(T,1)
+                % define trial parameters based on values in the table
+                clear trl;  trl.pw = T.pw(i);   trl.amp = 1;    trl.dur = T.dur(i);     trl.freq = T.freq(i);   trl.simdur = 3; %sec
+                trl = p2p_c.define_trial(tp,trl);
+
+                if nargin==2
+                    thresh(i)= p2p_c.find_threshold(trl,tp);
+                elseif nargin ==3
+                    thresh(i)= p2p_c.find_threshold(trl,tp, varargin{1});
+                end
+            end
+
+            if strcmp('amp',T.Properties.VariableNames)
+                err = nansum((thresh-T.amp').^2);
+                disp(['err = ',  num2str(round(err, 3))]);
+            else
+                err = NaN;
+            end
+
+            if isfield(tp,'experimentList')
+                for i = 1:length(tp.experimentList)
+                    disp(sprintf('%10s: %g',tp.experimentList{i},tp.sc_in(i)));
+                end
+            end
+        end
 
         % function err = fit_brightness(tp, T, varargin)
         %     if nargin==3
@@ -1100,7 +1100,7 @@ classdef p2p_c
         %     % following parameters for each trial:
         %     % pw      pulse width (sec)
         %     % dur     trial duration (sec)
-        %     % freq    pulse frequency (Hz)
+        %     % freq    pulse frequency (Hz)=––-≠
         %     % amp     amplitude at detection threshold
         %     if nargin==3
         %         nc = varargin{1};
@@ -1238,156 +1238,156 @@ classdef p2p_c
         %     trl.MDP = trl.MDP.*nc.strengthMDP;
         % end
 
-        % function threshold = find_threshold(trl, tp, varargin)
-        %     % Find amplitudes at threshold with the leaky integrate and
-        %     % fire model
-        %     % takes in trial, tp, and optional fitParams
-        %     % finds and returns the trl.amp for which the max output of the
-        %     % model for that trial, trial.resp, is equal to fitParams.thr
-        % 
-        %     if nargin ==2
-        %         nCells = 1;
-        %         nc = p2p_c.define_integratefirecells(nCells);
-        %     elseif nargin == 3 && ~isempty(varargin{1})
-        %         if isstruct(varargin{1})
-        %             nc = varargin{1};
-        %         elseif strcmp(tp.spikemodel, 'integratefire')
-        %             nCells = varargin{1};
-        %             nc = p2p_c.define_integratefirecells(nCells);
-        %         end
-        %     end
-        %     if nargin == 4
-        %         verbose = varargin{2};
-        %     else
-        %         verbose = 0;
-        %     end
-        %     if ~isfield(tp, 'nReps')
-        %         tp.nReps = 12;
-        %     end
-        % 
-        %     % first find the lowest 'hi' response
-        % 
-        %     resp = 0;
-        %     if verbose;  disp('finding upper amplitude for search'); end
-        %     trl.amp = .5;
-        % 
-        %     while resp<tp.thresh_resp
-        %         trl.amp = trl.amp*2;
-        %         trl = p2p_c.define_trial(tp,trl);
-        %         if strcmp(tp.spikemodel, 'integratefire')
-        %             trl = p2p_c.spike_model(tp, trl, nc);
-        %         elseif strcmp(tp.spikemodel, 'convolve')
-        %             trl = p2p_c.spike_model(tp, trl);
-        %         else
-        %             error('spiking model not recognized');
-        %         end
-        %         resp = max(trl.resp);
-        %         disp(['amp = ', num2str(trl.amp), ' resp = ', num2str(resp), ' thresh = ', num2str(tp.thresh_resp)] )
-        %     end
-        % 
-        %     % 3/7/25 gmb changed lo from 0 to trl.amp/2 since we know thresh is between amp/2 and amp
-        %     hi = trl.amp;  
-        %     if trl.amp > 1
-        %         lo = trl.amp/2;
-        %     else
-        %         lo = 0;
-        %     end
-        %     % then do the binary search
-        %     for i = 1:tp.nReps
-        %         trl.amp  = (hi+lo)/2;
-        %         trl = p2p_c.define_trial(tp,trl);
-        %         if strcmp(tp.spikemodel, 'integratefire')
-        %             trl = p2p_c.spike_model(tp, trl, nc);
-        %         elseif strcmp(tp.spikemodel, 'convolve')
-        %             trl = p2p_c.spike_model(tp, trl);
-        %         else
-        %             error('spiking model not recognized');
-        %         end
-        %         resp = max(trl.resp);
-        %         if max(resp(:)) > tp.thresh_resp
-        %             hi = trl.amp;
-        %         else
-        %             lo = trl.amp;
-        %         end
-        %         disp(['amp = ', num2str(trl.amp), ' resp = ', num2str(resp), ' thresh = ', num2str(tp.thresh_resp)] )
-        %     end
-        %     threshold = trl.amp;
-        % end
+        function threshold = find_threshold(trl, tp, varargin)
+            % Find amplitudes at threshold with the leaky integrate and
+            % fire model
+            % takes in trial, tp, and optional fitParams
+            % finds and returns the trl.amp for which the max output of the
+            % model for that trial, trial.resp, is equal to fitParams.thr
+
+            if nargin ==2
+                nCells = 1;
+                nc = p2p_c.define_integratefirecells(nCells);
+            elseif nargin == 3 && ~isempty(varargin{1})
+                if isstruct(varargin{1})
+                    nc = varargin{1};
+                elseif strcmp(tp.spikemodel, 'integratefire')
+                    nCells = varargin{1};
+                    nc = p2p_c.define_integratefirecells(nCells);
+                end
+            end
+            if nargin == 4
+                verbose = varargin{2};
+            else
+                verbose = 0;
+            end
+            if ~isfield(tp, 'nReps')
+                tp.nReps = 12;
+            end
+
+            % first find the lowest 'hi' response
+
+            resp = 0;
+            if verbose;  disp('finding upper amplitude for search'); end
+            trl.amp = .5;
+
+            while resp<tp.thresh_resp
+                trl.amp = trl.amp*2;
+                trl = p2p_c.define_trial(tp,trl);
+                if strcmp(tp.spikemodel, 'integratefire')
+                    trl = p2p_c.spike_model(tp, trl, nc);
+                elseif strcmp(tp.spikemodel, 'convolve')
+                    trl = p2p_c.spike_model(tp, trl);
+                else
+                    error('spiking model not recognized');
+                end
+                resp = max(trl.resp);
+                disp(['amp = ', num2str(trl.amp), ' resp = ', num2str(resp), ' thresh = ', num2str(tp.thresh_resp)] )
+            end
+
+            % 3/7/25 gmb changed lo from 0 to trl.amp/2 since we know thresh is between amp/2 and amp
+            hi = trl.amp;  
+            if trl.amp > 1
+                lo = trl.amp/2;
+            else
+                lo = 0;
+            end
+            % then do the binary search
+            for i = 1:tp.nReps
+                trl.amp  = (hi+lo)/2;
+                trl = p2p_c.define_trial(tp,trl);
+                if strcmp(tp.spikemodel, 'integratefire')
+                    trl = p2p_c.spike_model(tp, trl, nc);
+                elseif strcmp(tp.spikemodel, 'convolve')
+                    trl = p2p_c.spike_model(tp, trl);
+                else
+                    error('spiking model not recognized');
+                end
+                resp = max(trl.resp);
+                if max(resp(:)) > tp.thresh_resp
+                    hi = trl.amp;
+                else
+                    lo = trl.amp;
+                end
+                disp(['amp = ', num2str(trl.amp), ' resp = ', num2str(resp), ' thresh = ', num2str(tp.thresh_resp)] )
+            end
+            threshold = trl.amp;
+        end
 
 
-        % function nc = define_integratefirecells(varargin)
-        % 
-        %     if nargin == 1 & isstruct(varargin{1})
-        %         nc = varargin{1};
-        %         nCells = length(nc);
-        %         for cc = 1:nCells
-        %             if ~isfield(nc(cc), 'gl') || isempty(nc(cc).gl);      nc(cc).gl =  10; end % leak conductance (10)
-        %             if ~isfield(nc(cc), 'El') || isempty(nc(cc).El);      nc(cc).El = -58; end % leak voltage (-58)
-        %             if ~isfield(nc(cc), 'vt') || isempty(nc(cc).vt);      nc(cc).vt  = -50; end % resting membrane potential (-50)
-        %             if ~isfield(nc(cc), 'delT') || isempty(nc(cc).delT);  nc(cc).delT =   2; end % spike Width Factor (2)
-        %             if ~isfield(nc(cc), 'a') || isempty(nc(cc).a);        nc(cc).a  =   2; end % resonator/integrator variable (2)
-        %             if ~isfield(nc(cc), 'tauW') || isempty(nc(cc).tauW);  nc(cc).tauW = 0.15; end % adaptation decay time (0.12)
-        %             if ~isfield(nc(cc), 'b') || isempty(nc(cc).b);        nc(cc).b = 100; end % adaptation jump (update for w) (100)
-        %             if ~isfield(nc(cc), 'vreset') || isempty(nc(cc).vreset); nc(cc).vreset = -46; end % voltage reset (-46)
-        %             if ~isfield(nc(cc), 'vpeak') || isempty(nc(cc).vpeak);    nc(cc).vpeak = 0; end % spike threshold
-        %             if ~isfield(nc(cc), 'tARP') || isempty(nc(cc).tARP);      nc(cc).tARP = 0 ; end % 5*10^-3;  % absolute refractory period
-        %         end
-        %     else
-        %         if nargin==0
-        %             nCells = 1;
-        %         elseif nargin == 1 && isnumeric(varargin{1})
-        %             nCells = varargin{1}; % using the number of cells and filling in values.
-        %         end
-        % 
-        %         for cc = 1:nCells  % populate any missing values
-        %             if nCells == 1
-        %                 nc(1).R = 5;
-        %             end
-        %             nc(cc).R = 4.5+rand(1);
-        %             nc(cc).gl =  10;  % leak conductance (10)
-        %             nc(cc).El = -58;  % leak voltage (-58)
-        %             nc(cc).vt  = -50;  % resting membrane potential (-50)
-        %             nc(cc).delT = 2;  % spike Width Factor (2)
-        %             nc(cc).a  = 2;  % resonator/integrator variable (2)
-        %             nc(cc).tauW = 0.15;  % adaptation decay time (0.12)
-        %             nc(cc).b = 100;  % adaptation jump (update for w) (100)
-        %             nc(cc).vreset = -46;  % voltage reset (-46)
-        %             nc(cc).vpeak = 0;  % spike threshold
-        %             nc(cc).tARP = 0 ; % 5*10^-3;  % absolute refractory period
-        % 
-        %         end
-        %     end
-        % end
+        function nc = define_integratefirecells(varargin)
+
+            if nargin == 1 & isstruct(varargin{1})
+                nc = varargin{1};
+                nCells = length(nc);
+                for cc = 1:nCells
+                    if ~isfield(nc(cc), 'gl') || isempty(nc(cc).gl);      nc(cc).gl =  10; end % leak conductance (10)
+                    if ~isfield(nc(cc), 'El') || isempty(nc(cc).El);      nc(cc).El = -58; end % leak voltage (-58)
+                    if ~isfield(nc(cc), 'vt') || isempty(nc(cc).vt);      nc(cc).vt  = -50; end % resting membrane potential (-50)
+                    if ~isfield(nc(cc), 'delT') || isempty(nc(cc).delT);  nc(cc).delT =   2; end % spike Width Factor (2)
+                    if ~isfield(nc(cc), 'a') || isempty(nc(cc).a);        nc(cc).a  =   2; end % resonator/integrator variable (2)
+                    if ~isfield(nc(cc), 'tauW') || isempty(nc(cc).tauW);  nc(cc).tauW = 0.15; end % adaptation decay time (0.12)
+                    if ~isfield(nc(cc), 'b') || isempty(nc(cc).b);        nc(cc).b = 100; end % adaptation jump (update for w) (100)
+                    if ~isfield(nc(cc), 'vreset') || isempty(nc(cc).vreset); nc(cc).vreset = -46; end % voltage reset (-46)
+                    if ~isfield(nc(cc), 'vpeak') || isempty(nc(cc).vpeak);    nc(cc).vpeak = 0; end % spike threshold
+                    if ~isfield(nc(cc), 'tARP') || isempty(nc(cc).tARP);      nc(cc).tARP = 0 ; end % 5*10^-3;  % absolute refractory period
+                end
+            else
+                if nargin==0
+                    nCells = 1;
+                elseif nargin == 1 && isnumeric(varargin{1})
+                    nCells = varargin{1}; % using the number of cells and filling in values.
+                end
+
+                for cc = 1:nCells  % populate any missing values
+                    if nCells == 1
+                        nc(1).R = 5;
+                    end
+                    nc(cc).R = 4.5+rand(1);
+                    nc(cc).gl =  10;  % leak conductance (10)
+                    nc(cc).El = -58;  % leak voltage (-58)
+                    nc(cc).vt  = -50;  % resting membrane potential (-50)
+                    nc(cc).delT = 2;  % spike Width Factor (2)
+                    nc(cc).a  = 2;  % resonator/integrator variable (2)
+                    nc(cc).tauW = 0.15;  % adaptation decay time (0.12)
+                    nc(cc).b = 100;  % adaptation jump (update for w) (100)
+                    nc(cc).vreset = -46;  % voltage reset (-46)
+                    nc(cc).vpeak = 0;  % spike threshold
+                    nc(cc).tARP = 0 ; % 5*10^-3;  % absolute refractory period
+
+                end
+            end
+        end
 
 
-        % function [trl, nc] = spike_model(tp, trl, varargin)
-        %     % There are two variations for predicting neural / perceptual responses to
-        %     % electrical stimulation
-        %     % convolve and integrate fire
-        %     % takes in tp, trl and variable argument nc if using an
-        %     % integrate and fire model
-        % 
-        %     if ~isfield(tp, 'spikemodel')
-        %         tp.spikemodel = 'convolve';
-        %     end
-        %     if strcmp(tp.spikemodel, 'convolve')
-        %         trl = p2p_c.convolve_model(tp, trl);
-        %     elseif strcmp(tp.spikemodel, 'integratefire')
-        %         if nargin>2
-        %             nc = p2p_c.define_integratefirecells(varargin{1}); % set up the cells for the integrate fire model
-        %         else
-        %             nc = p2p_c.define_integratefirecells(1);
-        %         end
-        %         [trl, nc] = p2p_c.integratefire_model(tp, trl, nc);
-        %     end
-        %     if tp.gammaflag
-        %         trl = p2p_c.slowgamma(tp, trl);
-        %     else
-        %         trl.resp = zeros(size(trl.pt));
-        %         trl.resp(trl.ptid) = trl.spikestrength;
-        %         trl.max_temporal_response = max(trl.resp);
-        %     end
-        % end
+        function [trl, nc] = spike_model(tp, trl, varargin)
+            % There are two variations for predicting neural / perceptual responses to
+            % electrical stimulation
+            % convolve and integrate fire
+            % takes in tp, trl and variable argument nc if using an
+            % integrate and fire model
+
+            if ~isfield(tp, 'spikemodel')
+                tp.spikemodel = 'convolve';
+            end
+            if strcmp(tp.spikemodel, 'convolve')
+                trl = p2p_c.convolve_model(tp, trl);
+            elseif strcmp(tp.spikemodel, 'integratefire')
+                if nargin>2
+                    nc = p2p_c.define_integratefirecells(varargin{1}); % set up the cells for the integrate fire model
+                else
+                    nc = p2p_c.define_integratefirecells(1);
+                end
+                [trl, nc] = p2p_c.integratefire_model(tp, trl, nc);
+            end
+            if tp.gammaflag
+                trl = p2p_c.slowgamma(tp, trl);
+            else
+                trl.resp = zeros(size(trl.pt));
+                trl.resp(trl.ptid) = trl.spikestrength;
+                trl.max_temporal_response = max(trl.resp);
+            end
+        end
 
         function trl = convolve_model(tp, trl)
             % Implements 'finite_element' using the closed-form solution to
@@ -1472,89 +1472,89 @@ classdef p2p_c
             end
         end
 
-        % function trl = slowgamma(tp, trl)
-        %     % takes the estimate of spiking (spiking strength for the
-        %     % convolve model, spikes across multiple neurons for the
-        %     % integrate fire model and passes through a slow filter
-        %     % that represents the brain
-        % 
-        % 
-        %     h = p2p_c.gamma(tp.ncascades,tp.tau2,trl.t);            % Generate the n-cascade impulse response
-        %     tid = find(cumsum(h)*tp.dt>=.999,1,'first');      % Shorten the filter if needed to speed up the code.
-        %     if ~isempty(tid)
-        %         h = h(1:tid);
-        %         trl.imp_resp = h;  % close enough to use h
-        %     else
-        %         disp('Warning: gamma hdr might not have a long enough time vector');
-        %     end
-        %     impFrames = 0:(length(trl.imp_resp)-1);
-        %     resp = zeros(1,length(trl.t)+length(trl.imp_resp));        % zero stuff out
-        % 
-        %     if strcmp(tp.spikemodel, 'convolve')
-        %         % add an artificial refractory period, not needed for the
-        %         % integrate and fire model
-        %         interspike = [1,diff(trl.t(trl.ptid))];
-        %         trl.spikes_norefrac = trl.spikestrength;
-        %         trl.spikestrength = trl.spikestrength.*(1-exp(-tp.refrac*(interspike+tp.delta)));
-        %     end
-        % 
-        %     for i=1:length(trl.spikestrength)
-        %         id = find(trl.t>trl.t(trl.ptid(i)),1,'first');
-        %         resp(id+impFrames)  =   ...
-        %             resp(id+impFrames) + trl.spikestrength(i)*trl.imp_resp;
-        %     end
-        % 
-        %     trl.resp_lin = resp;
-        %     resp = p2p_c.nonlinearity(tp, resp);
-        % 
-        %     % save the time-course of the response for output
-        %     trl.resp = resp(1:length(trl.t));
-        %     trl.spikeWhen = trl.ptid;
-        %     trl.max_temporal_response = max(trl.resp);
-        % end
+        function trl = slowgamma(tp, trl)
+            % takes the estimate of spiking (spiking strength for the
+            % convolve model, spikes across multiple neurons for the
+            % integrate fire model and passes through a slow filter
+            % that represents the brain
+
+
+            h = p2p_c.gamma(tp.ncascades,tp.tau2,trl.t);            % Generate the n-cascade impulse response
+            tid = find(cumsum(h)*tp.dt>=.999,1,'first');      % Shorten the filter if needed to speed up the code.
+            if ~isempty(tid)
+                h = h(1:tid);
+                trl.imp_resp = h;  % close enough to use h
+            else
+                disp('Warning: gamma hdr might not have a long enough time vector');
+            end
+            impFrames = 0:(length(trl.imp_resp)-1);
+            resp = zeros(1,length(trl.t)+length(trl.imp_resp));        % zero stuff out
+
+            if strcmp(tp.spikemodel, 'convolve')
+                % add an artificial refractory period, not needed for the
+                % integrate and fire model
+                interspike = [1,diff(trl.t(trl.ptid))];
+                trl.spikes_norefrac = trl.spikestrength;
+                trl.spikestrength = trl.spikestrength.*(1-exp(-tp.refrac*(interspike+tp.delta)));
+            end
+
+            for i=1:length(trl.spikestrength)
+                id = find(trl.t>trl.t(trl.ptid(i)),1,'first');
+                resp(id+impFrames)  =   ...
+                    resp(id+impFrames) + trl.spikestrength(i)*trl.imp_resp;
+            end
+
+            trl.resp_lin = resp;
+            resp = p2p_c.nonlinearity(tp, resp);
+
+            % save the time-course of the response for output
+            trl.resp = resp(1:length(trl.t));
+            trl.spikeWhen = trl.ptid;
+            trl.max_temporal_response = max(trl.resp);
+        end
 
         %% utilities
         % function out = chronaxie(p,pw)
         %     out = p.amp./(p.tau*(1-exp(-pw/p.tau)));
         % end
 
-        % function y = gamma(n,k,t)
-        %     %   y=gamma(n,k,t)
-        %     %   returns a gamma function on vector t
-        %     %   y=(t/k).^(n-1).*exp(-t/k)/(k*factorial(n-1));
-        %     %   which is the result of an n stage leaky integrator.
-        % 
-        %     %   6/27/95 Written by G.M. Boynton at Stanford University
-        %     %   4/19/09 Simplified it for Psychology 448/538 at U.W.
-        %     %
-        %     y = (t/k).^(n-1).*exp(-t/k)/(k*factorial(n-1));
-        %     y(t<0) = 0;
-        % end
+        function y = gamma(n,k,t)
+            %   y=gamma(n,k,t)
+            %   returns a gamma function on vector t
+            %   y=(t/k).^(n-1).*exp(-t/k)/(k*factorial(n-1));
+            %   which is the result of an n stage leaky integrator.
 
-        % function y = nonlinearity(tp,x)
-        %     if ~isfield(tp, 'sc_in');    tp.sc_in = 1;
-        %     else
-        %         sc_in  =  tp.sc_in;
-        %     end
-        %     % some of our favorite static nonlinearities:
-        %     switch tp.model
-        %         case 'sigmoid'
-        %             y = sc_in .* x.^tp.power./(x.^tp.power + tp.sigma.^2);
-        %         case 'normcdf'
-        %             y = normcdf(x, tp.mean, tp.sigma);
-        %             y(y<0) = 0;
-        %         case 'weibull'
-        %             y = sc_in*p2p_c.weibull(tp,x);
-        %         case 'power'
-        %             y = sc_in*x.^tp.power;
-        %         case 'exp'
-        %             y = sc_in*x.^tp.k;
-        %         case 'compression'
-        %             y = tp.sc_in.*(tp.power.*tanh((x.*tp.sc_in)./tp.power));
-        %         case 'linear'
-        %             y = tp.sc_in.*x;
-        %     end
-        % end
+            %   6/27/95 Written by G.M. Boynton at Stanford University
+            %   4/19/09 Simplified it for Psychology 448/538 at U.W.
+            %
+            y = (t/k).^(n-1).*exp(-t/k)/(k*factorial(n-1));
+            y(t<0) = 0;
+        end
+
+        function y = nonlinearity(tp,x)
+            if ~isfield(tp, 'sc_in');    tp.sc_in = 1;
+            else
+                sc_in  =  tp.sc_in;
+            end
+            % some of our favorite static nonlinearities:
+            switch tp.model
+                case 'sigmoid'
+                    y = sc_in .* x.^tp.power./(x.^tp.power + tp.sigma.^2);
+                case 'normcdf'
+                    y = normcdf(x, tp.mean, tp.sigma);
+                    y(y<0) = 0;
+                case 'weibull'
+                    y = sc_in*p2p_c.weibull(tp,x);
+                case 'power'
+                    y = sc_in*x.^tp.power;
+                case 'exp'
+                    y = sc_in*x.^tp.k;
+                case 'compression'
+                    y = tp.sc_in.*(tp.power.*tanh((x.*tp.sc_in)./tp.power));
+                case 'linear'
+                    y = tp.sc_in.*x;
+            end
+        end
 
         % function [p] = weibull(params, x)
         %     % [p] = Weibull(params, x)
@@ -2003,95 +2003,95 @@ classdef p2p_c
 
         %% plotting functions
         % plotting functions
-        % function logx2raw(base, precision)
-        %     % logx2raw(base, precision)
-        %     % Converts X-axis labels from log to raw values.
-        %     % Inputs:
-        %     %   base           Base of log transform (default: e)
-        %     %   precision      Number of decimal places (default: 2)
-        %     %
-        %     % Example:
-        %     % x = linspace(-3,0,11);
-        %     % plot(log(x), log(x.^2));
-        %     % logx2raw();
-        %     % logy2raw(); % should be tolerant to multiple calls
-        %     %
-        %     % Note:
-        %     % - See also: logy2raw.m
-        % 
-        %     % 11/17/96       gmb wrote it.
-        %     % 6/6/96	     gmb added precision argument
-        %     % 01/30/02       gmb updated it to use cell arrays, and to use original
-        %     %                xtick values instead of converting labels. This way,
-        %     %                multiple calls to this function doesn't keep converting
-        %     %                the axis.
-        %     % Edited by Kelly Chang - February 18, 2017
-        % 
-        %     %% Input Control
-        % 
-        %     if ~exist('base', 'var')
-        %         base = exp(1);
-        %     end
-        % 
-        %     if ~exist('precision', 'var')
-        %         precision = 2;
-        %     end
-        % 
-        %     %% Calculate Log x-axis Labels
-        % 
-        %     precision = sprintf('%%%2.1ff', precision*1.1);
-        %     origXTick = get(gca, 'XTick'); % log x-axis labels (raw)
-        %     newXTick = base.^(origXTick); % convert to raw
-        %     newXLabel = arrayfun(@(x) sprintf(precision,x), newXTick, ...
-        %         'UniformOutput', false); % write new x-axis labels
-        %     set(gca, 'XTickLabel', newXLabel); % set x-axis labels of current graph
-        % end
-        % 
-        % function logy2raw(base, precision)
-        %     % logy2raw(base, precision)
-        %     %
-        %     % Converts Y-axis labels from log to raw values.
-        %     %
-        %     % Inputs:
-        %     %   base           Base of log transform (default: e)
-        %     %   precision      Number of decimal places (default: 2)
-        %     %
-        %     % Example:
-        %     % x = linspace(-3,0,11);
-        %     % plot(log(x), log(x.^2));
-        %     % logx2raw();
-        %     % logy2raw(); % should be tolerant to multiple calls
-        %     %
-        %     % Note:
-        %     % - See also: logx2raw.m
-        % 
-        %     % 11/17/96       gmb wrote it.
-        %     % 6/6/96	     gmb added precision argument
-        %     % 01/30/02       gmb updated it to use cell arrays, and to use original
-        %     %                xtick values instead of converting labels. This way,
-        %     %                multiple calls to this function doesn't keep converting
-        %     %                the axis.
-        %     % Edited by Kelly Chang - February 18, 2017
-        % 
-        %     %% Input Control
-        % 
-        %     if ~exist('base', 'var')
-        %         base = exp(1);
-        %     end
-        % 
-        %     if ~exist('precision', 'var')
-        %         precision = 2;
-        %     end
-        % 
-        %     %% Calculate Log x-axis Labels
-        % 
-        %     precision = sprintf('%%%2.1ff', precision*1.1);
-        %     origYTick = get(gca, 'YTick'); % log y-axis labels (raw)
-        %     newYTick = base.^(origYTick); % convert to raw
-        %     newYLabel = arrayfun(@(x) sprintf(precision,x), newYTick, ...
-        %         'UniformOutput', false); % write new y-axis labels
-        %     set(gca, 'YTickLabel', newYLabel); % set y-axis labels of current graph
-        % end
+        function logx2raw(base, precision)
+            % logx2raw(base, precision)
+            % Converts X-axis labels from log to raw values.
+            % Inputs:
+            %   base           Base of log transform (default: e)
+            %   precision      Number of decimal places (default: 2)
+            %
+            % Example:
+            % x = linspace(-3,0,11);
+            % plot(log(x), log(x.^2));
+            % logx2raw();
+            % logy2raw(); % should be tolerant to multiple calls
+            %
+            % Note:
+            % - See also: logy2raw.m
+
+            % 11/17/96       gmb wrote it.
+            % 6/6/96	     gmb added precision argument
+            % 01/30/02       gmb updated it to use cell arrays, and to use original
+            %                xtick values instead of converting labels. This way,
+            %                multiple calls to this function doesn't keep converting
+            %                the axis.
+            % Edited by Kelly Chang - February 18, 2017
+
+            %% Input Control
+
+            if ~exist('base', 'var')
+                base = exp(1);
+            end
+
+            if ~exist('precision', 'var')
+                precision = 2;
+            end
+
+            %% Calculate Log x-axis Labels
+
+            precision = sprintf('%%%2.1ff', precision*1.1);
+            origXTick = get(gca, 'XTick'); % log x-axis labels (raw)
+            newXTick = base.^(origXTick); % convert to raw
+            newXLabel = arrayfun(@(x) sprintf(precision,x), newXTick, ...
+                'UniformOutput', false); % write new x-axis labels
+            set(gca, 'XTickLabel', newXLabel); % set x-axis labels of current graph
+        end
+
+        function logy2raw(base, precision)
+            % logy2raw(base, precision)
+            %
+            % Converts Y-axis labels from log to raw values.
+            %
+            % Inputs:
+            %   base           Base of log transform (default: e)
+            %   precision      Number of decimal places (default: 2)
+            %
+            % Example:
+            % x = linspace(-3,0,11);
+            % plot(log(x), log(x.^2));
+            % logx2raw();
+            % logy2raw(); % should be tolerant to multiple calls
+            %
+            % Note:
+            % - See also: logx2raw.m
+
+            % 11/17/96       gmb wrote it.
+            % 6/6/96	     gmb added precision argument
+            % 01/30/02       gmb updated it to use cell arrays, and to use original
+            %                xtick values instead of converting labels. This way,
+            %                multiple calls to this function doesn't keep converting
+            %                the axis.
+            % Edited by Kelly Chang - February 18, 2017
+
+            %% Input Control
+
+            if ~exist('base', 'var')
+                base = exp(1);
+            end
+
+            if ~exist('precision', 'var')
+                precision = 2;
+            end
+
+            %% Calculate Log x-axis Labels
+
+            precision = sprintf('%%%2.1ff', precision*1.1);
+            origYTick = get(gca, 'YTick'); % log y-axis labels (raw)
+            newYTick = base.^(origYTick); % convert to raw
+            newYLabel = arrayfun(@(x) sprintf(precision,x), newYTick, ...
+                'UniformOutput', false); % write new y-axis labels
+            set(gca, 'YTickLabel', newYLabel); % set y-axis labels of current graph
+        end
 
         function plotcortgrid(img, c,  varargin)
             % plotcortgrid(img, c, cmap,figNum, evalstr)
@@ -2238,7 +2238,8 @@ classdef p2p_c
             
             phos = mean(trl.max_phosphene, 3);
             phos = phos./max(phos(:));% average across the two eyes
-            pred = p2p_c.Gauss(p, v);  pred = pred./max(pred(:));
+            pred = p2p_c.Gauss(p, v);  
+            pred = pred./max(pred(:));
 
             err = sum((phos(:)-pred(:)).^2);
             if p.sigma<0; err =err +  abs(p.sigma)*10.^6; end
