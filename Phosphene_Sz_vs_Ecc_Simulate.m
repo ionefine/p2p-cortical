@@ -17,9 +17,9 @@ close all
 
 
 %% Define eccentricties and radii to compare
-nSamp = 2; % we are going to re-estimate the size of the percept multiple times. Error bars pretty low with 25
-eccList = exp(linspace(log(.5), log(35), 3)); % the eccentricities of the electrodes
-radList =  exp(linspace(log(.05), log(5), 3)); % electrode size from teeny tiny to huge. These are radii, in cm units
+nSamp = 25; % we are going to re-estimate the size of the percept multiple times. Error bars pretty low with 25
+eccList = exp(linspace(log(.5), log(35), 15)); % the eccentricities of the electrodes
+radList =  exp(linspace(log(.05), log(5), 10)); % electrode size from teeny tiny to huge. These are radii, in cm units
 
 
 %% generate cortical surface, visual map and pulse train
@@ -35,7 +35,7 @@ c.I_k = 1000;
 % define cortex dimensions
 c.cortexHeight = [-10,10]; % degrees top to bottom, degrees LR,
 c.cortexLength = [-80, 5];
-c.pixpermm = 12; % default 6, resolution of electric field sampling, for very small electrodes may need to be decreased
+c.pixpermm = 8; % default 6, resolution of electric field sampling, for very small electrodes may need to be decreased
 c = p2p_c.define_cortex(c); % define the properties of the cortical map
 
 % define the visual map
@@ -103,7 +103,7 @@ for rad = 1:length(radList)
         radius(rad, ecc, r) = radList(rad);
         eccentricity(rad, ecc, r) = eccList(ecc);
 
-        disp(r)
+        %disp(r)
         fprintf('sigma: %.4f\n', p.sigma);
         disp(['sigma slice at r = ', num2str(r)]);
         disp(sigma(:, :, r));

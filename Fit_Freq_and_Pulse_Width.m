@@ -16,9 +16,9 @@ tp = p2p_c.define_temporalparameters();
 
 % Calculate model response to a standard trial
 clear standard_trl;
-standard_trl.pw =  0.00025;  %0.00025;  why did we use .00025 for frequency data and .001 for pw?  
+standard_trl.pw =  0.00025; 
 standard_trl.amp = 3;
-standard_trl.dur = .5 ;  % why did we use 0.5 for frequency and 1 for pw?
+standard_trl.dur = .5 ;  
 standard_trl.freq = 50;
 standard_trl.simdur = 6; %sec
 
