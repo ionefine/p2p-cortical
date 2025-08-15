@@ -1,7 +1,11 @@
-% Simulate_SmallElectrodes
+
+% Simple program to define a trial and electrode array and then simulate 
+% phosphenes produced for each electrode. 
+% this version uses genetate_phosphene_multiple and generates phosphenes
+% from multiple trials to compare for each electrode
 
 
-% Written by GMB & IF
+% Written by GMB & IF & ES
 % 25/02/2023 clean up
 % 12/7/2024 clean up
 % 6/24/2025 clean up (ES)
