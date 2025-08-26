@@ -9,6 +9,8 @@ If you use p2p-cortical in a scholarly publication, please cite as:
 Fine, I., Boynton, G.M., A virtual patient simulation modeling the neural and perceptual effects of human visual cortical stimulation, from pulse trains to percepts. Scientific Reports, 2024 14, 17400.
 [https://www.nature.com/articles/s41598-024-65337-1#citeas](https://doi.org/10.1038/s41598-024-65337-1)
 
+The code in this library was originally written by Ione Fine and Geoffrey Boynten and reviewed, edited and cleaned up by Eirini Schoinas.
+
 Getting started
 ===============
 
