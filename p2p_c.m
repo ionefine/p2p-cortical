@@ -2109,35 +2109,35 @@ classdef p2p_c
         out = exp(-((v.X-p.x).^2+(v.Y-p.y).^2)/(2*p.sigma^2));
     end
 
-    %         function [err,predcx,predcy,cx,cy] = fitElectrodeGrid(p,vx,vy)
-    %             % Gives a fit of a projected set of phosphenes onto a 6x4
-    %             % electrode grid by first projecting the phosphenes using the
-    %             % v2c mapping function and then moving and rotating the grid.
-    %
-    %             p.shift = p.k*log(p.a);  % This really should be built in
-    %
-    %             % Project phosphenes into cortex (including squishing)
-    %             [cx,cy] = p2p_Beauchamp.v2c_real(p, vx, vy);
-    %
-    %             % Creat a 6x4 array
-    %             [x0,y0] = meshgrid(-1.5:1.5,-2.5:2.5);
-    %             x0 =x0(:)';
-    %             y0 =y0(:)';
-    %
-    %             % Expand by dx
-    %             x0 = x0*p.dx;
-    %             y0 = y0*p.dx;
-    %
-    %             % Rotate by ang and shift by (xc,yc)
-    %             rot = [cos(p.ang) sin(p.ang);-sin(p.ang) cos(p.ang)];
-    %
-    %             M = rot*[x0;y0] + repmat([p.xc;p.yc],1,24);
-    %             predcx = M(1,:);
-    %             predcy = M(2,:);
-    %
-    %             % Compare predicted to projected
-    %             err = sum((predcx-cx).^2 + (predcy-cy).^2);
-    %         end
+    function [err,predcx,predcy,cx,cy] = fitElectrodeGrid(p,vx,vy)
+        % Gives a fit of a projected set of phosphenes onto a 6x4
+        % electrode grid by first projecting the phosphenes using the
+        % v2c mapping function and then moving and rotating the grid.
+
+        p.shift = p.k*log(p.a);  % This really should be built in
+
+        % Project phosphenes into cortex (including squishing)
+        [cx,cy] = p2p_c.v2c_real(p, vx, vy);
+
+        % Creat a 6x4 array
+        [x0,y0] = meshgrid(-1.5:1.5,-2.5:2.5);
+        x0 =x0(:)';
+        y0 =y0(:)';
+
+        % Expand by dx
+        x0 = x0*p.dx;
+        y0 = y0*p.dx;
+
+        % Rotate by ang and shift by (xc,yc)
+        rot = [cos(p.ang) sin(p.ang);-sin(p.ang) cos(p.ang)];
+
+        M = rot*[x0;y0] + repmat([p.xc;p.yc],1,24);
+        predcx = M(1,:);
+        predcy = M(2,:);
+
+        % Compare predicted to projected
+        err = sum((predcx-cx).^2 + (predcy-cy).^2);
+    end
 end
 end
 
