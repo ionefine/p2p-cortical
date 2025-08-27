@@ -1,0 +1,166 @@
+% SimulateMapseccList
+%
+% Simulation of ocular dominance, orientation, & on-off organization
+% create and save figures in figures/
+% Written by GMB & IF
+% 25/02/2023 moved into clean folder (IF)
+% code review and more comments by Eirini Schoinas
+%
+% paper referred to is 
+% Fine, I., Boynton, G.M., A virtual patient simulation modeling the neural 
+% and perceptual effects of human visual cortical stimulation, from pulse 
+% trains to percepts. Scientific Reports, 2024 14, 17400. 
+% https://www.nature.com/articles/s41598-024-65337-1#citeas
+
+clear
+clear all
+
+rng(1171964)  % fix the random number generator. This affects the ocular dominance/orientation maps
+%% Set Up 
+% define cortex & visual space
+c.cortexHeight = [-35, 35]; % degrees top to bottom, degrees LR,
+c.cortexLength = [-5, 72];
+c.cropLength  = [ 0 70];
+v.eccList = [1 2 4  8 16 32];
+c.pixpermm =34; % default 6, resolution of electric field sampling, for very small electrodes may need to be decreased
+
+% transform to visual space, this should be scaled to which electrodes you
+% are simulating
+v.visfieldHeight = [-32,32];
+v.visfieldWidth= [-32,32];
+v.pixperdeg = 34;  %visual field map size and samping
+
+v = p2p_c.define_visualmap(v); % defines the visual map
+c = p2p_c.define_cortex(c); % define the properties of the cortical map
+[c, v] = p2p_c.generate_corticalmap(c, v); % create ocular dominance/orientation/rf size maps on cortical surface
+
+%% blank cortical and retinal grids
+figNum = 1; figure(figNum); clf;
+p2p_c.plotcortgrid(zeros(size(c.X)), c, gray(256), figNum,[ 'title(''cortex'')']); drawnow;
+savefig('figures/SimulateMaps_Fig1'); % cortical grid
+figNum = 10;figure(figNum); clf;
+p2p_c.plotretgrid(zeros(size(v.X)), v, gray(256), figNum); drawnow
+savefig('figures/SimulateMaps_Fig1_Inset'); % retinal grid
+
+
+%% ocular dominance map
+% ocular dominance columns (entire cortical map and a 5mm2  region)
+% (left- vs right-eye preference)
+% lighter = more left dominant, darker more right dominant
+% fig 2C in paper
+figNum = 2;figure(figNum); clf;
+p2p_c.plotcortgrid(c.ODmap*256, c, gray(256), figNum,[ 'title(''ocular dominance'')']); drawnow;
+savefig('figures/SimulateMaps_Fig2'); % entire cortical map
+figNum = 12; figure(figNum); clf;
+p2p_c.plotcortgrid(c.ODmap*256, c, gray(256), figNum,[ 'title(''ocular dominance'')']); drawnow; axis square
+set(gca, 'YLim', [-2.5 2.5]); set(gca, 'XLim', [5 10]); 
+savefig('figures/SimulateMaps_Fig2_Inset'); % 5mm^2  region
+
+%% orientaton pinwheel maps
+% orientation preference of each cortical point
+% phasemap means each color is a different preferred bar orientation
+% see paper (fig 2B) for which color is which orientation
+figNum = 3;
+figure(figNum); clf;
+p2p_c.plotcortgrid((c.ORmap+pi)*256/(2*pi), c, phasemap(256), figNum,[ 'title(''orientation'')']); drawnow;
+savefig('figures/SimulateMaps_Fig3');  % entire cortical map
+
+figNum = 13; figure(figNum); clf;
+p2p_c.plotcortgrid((c.ORmap+pi)*256/(2*pi), c, phasemap(256), figNum,[ 'title(''orientation'')']); drawnow; axis square
+set(gca, 'XLim', [5 10])
+set(gca, 'YLim', [-2.5 2.5]); 
+savefig('figures/SimulateMaps_Fig3_Inset'); %5mm^2  region
+
+
+%% on vs. off strength
+% the relative strength of the response to increments(OFF) and decrements (ON)
+% see figure 2E in paper
+figNum = 4; figure(figNum); clf;
+p2p_c.plotcortgrid(c.ONOFFmap*256, c, gray(256), figNum,[ 'title(''on vs. off'')']); drawnow;
+savefig('figures/SimulateMaps_Fig4'); % entire cortex
+
+figNum =14; figure(figNum); clf; 
+p2p_c.plotcortgrid(c.ONOFFmap*256, c, gray(256), figNum,[ 'title(''on vs. off '')']); drawnow; axis square
+set(gca, 'XLim', [5 10])
+set(gca, 'YLim', [-2.5 2.5]); 
+savefig('figures/SimulateMaps_Fig4_Inset');% (5mm2 region)
+
+%% simple vs. complex
+% on- vs. off-subunit spatial separation
+% fig. 2D in paper
+figNum = 5;figure(figNum); clf;
+mnx =max(abs(c.DISTmap(:)));
+p2p_c.plotcortgrid((c.DISTmap+mnx)*256/(2*mnx), c, redgreen(256), figNum,[ 'title(''simple vs. complex'')']); drawnow;
+savefig('figures/SimulateMaps_Fig5'); % entire cortex
+
+figNum =15; figure(figNum); clf;
+p2p_c.plotcortgrid((c.DISTmap+mnx)*256/(2*mnx), c, redgreen(256), figNum,[ 'title(''simple vs. complex '')']); drawnow; axis square
+set(gca, 'XLim', [5 10])
+set(gca, 'YLim', [-2.5 2.5]); 
+savefig('figures/SimulateMaps_Fig5_Inset');%(5mm2 region)
+
+
+%% receptive field sizes (entire cortical map)
+% create fig. 2F in paper
+linCoolMap = cool(2048); % colormap
+compressionFac = .3;  % fiddle with this if you'd like.
+id = ceil(2047*linspace(0,1,256).^compressionFac)+1;
+cmap = linCoolMap(id,:);
+figNum = 6; figure(figNum); clf;
+mnx =max(abs(c.DISTmap(:)));
+p2p_c.plotcortgrid(c.RFsizemap*256/mnx, c, cmap, figNum,[ 'title(''simple vs. complex'')']); drawnow;
+savefig('figures/SimulateMaps_Fig6'); % receptive field sizes (entire cortical map)
+
+% create legend bar 
+origTicks = [0.2,0.4,0.8,1.6,3.2,4.8];
+ticks = (origTicks-min(c.RFsizemap(:)))/(max(c.RFsizemap(:))-min(c.RFsizemap(:)));
+ticks = ticks.^(compressionFac);
+figNum = 16;figure(figNum); clf;  image(1,linspace(0,1,256),[1:256]'); 
+set(gca,'Position',[.45,.05,.1,.9]);
+set(gca,'YDir','normal');
+set(gca,'ytick',ticks);
+set(gca,'YTickLabel',num2str(origTicks'));
+set(gca,'xtick',[]);
+colormap(cool(256));
+savefig('figures/SimulateMaps_Fig6_Inset');
+set(gca,'FontSize',12);
+
+
+%% Example individual receptive fields in V1
+% was used to create figure 2G in paper
+% note there is randomness involved
+% save individual receptive fields
+lim = 5*v.pixperdeg;
+
+% cortical cells
+ct = 1;
+n_cells = 3; 
+figure(7) ; clf
+sz = round(2.5 * v.pixperdeg);   % 2.5 deg radius
+
+
+while ct<=n_cells % for each cell to plot
+    % get random cell + then get its RF
+    clist = randperm(prod(size(c.X))); 
+    RF = p2p_c.generate_corticalcell(1000, clist(1), c, v);
+    
+    % collapse ON and OF
+    mnRF = mean(RF, 3);
+    
+    if ~isnan(sum(mnRF(:))) % skip sites that produce an invalid RF
+        [row, col] = find(abs(mnRF)==max(abs(mnRF(:)))); % find location of max response
+        % lim = sz*1.2;
+        
+        % plotting
+        if row>lim & col>lim & row<size(c.X, 1)-lim & col<size(c.X, 2)-lim 
+            subplot(2, n_cells,ct); colormap(gray(256));
+            scFac = 127./max(abs(RF(:)));
+            image(127 +(scFac*RF(row-sz:row+sz, col-sz:col+sz, 1)));axis square; axis off; drawnow;
+            t =  title([round(c.v.ECC(clist(1)), 2) round(c.ODmap(clist(1)), 2)]);  set(t, 'FontSize', 6)
+            subplot(2,n_cells,ct+n_cells); colormap(gray);
+            image(127 + (scFac*RF(row-sz:row+sz, col-sz:col+sz, 2)));       axis square; axis off; drawnow
+            ct = ct+1;
+        end
+    end
+end
+savefig('figures/SimulateMaps_Fig7'); % save
