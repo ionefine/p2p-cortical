@@ -42,8 +42,7 @@ Right Panel shows corresponding simulations for two eccentricities. Bosking_Size
 ## Figure 5
 **5A:**  Anatomical panel from Neuron, 92/6, J. Winawer and J. Parvizi, linking electrical stimulation of human primary visual cortex, size of affected cortical area, Neuronal Responses, and Subjective Experience, Fig. 1A, Copyright (2016), with permission from Elsevier. 
 
-The white panels show single typical phosphene replotted from from Winawer, J. & Parvizi, J. Linking electrical stimulation of human primary visual cortex, size of affected cortical area, neuronal
-responses, and subjective experience. Neuron 92, 1213–1219. https://doi.org/10.1016/j.neuron.2016.11.008 (2016).  
+The white panels show single typical phosphene replotted from from Winawer, J. & Parvizi, J. Linking electrical stimulation of human primary visual cortex, size of affected cortical area, neuronal responses, and subjective experience. Neuron 92, 1213–1219. https://doi.org/10.1016/j.neuron.2016.11.008 (2016). Run Winawer_PhosphenePictures_Neuron2016.m to get the black panels.
 
 **5B:** Run Bosking_SizeEccentricity_JNeuro2017.m
 
