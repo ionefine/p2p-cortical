@@ -50,10 +50,11 @@ responses, and subjective experience. Neuron 92, 1213–1219. https://doi.org/10
 ## Figure 6
 **6A:** Replotted from Beauchamp, M. S. et al. Dynamic stimulation of visual cortex produces form vision in sighted and blind humans. Cell 181, 774-783e775. https://doi.org/10.1016/j.cell.2020.04.033 (2020).
 **6B:** Run BeauchampFig4.m
-**6C:** Run Beauchamp_DynamicLetters_Cell2020_RF.m and Beauchamp_DynamicLetters_Cell2020_movie.m
+**6C:** The upper left panel replots the patient reported phosphene maps of stimulated electrodes (bold circles) and the direction of the temporal sequence of stimulation (arrow) from Beauchamp et al. The lower left panel replots the participant’s actual drawing of the visual percept from Beauchamp et al. Run Beauchamp_DynamicLetters_Cell2020_RF.m and Beauchamp_DynamicLetters_Cell2020_movie.m to get simulated letters in the right panel. 
 
 ## Figure 7
-**7B and 7C** Run Phosphene_Sz_vs_Ecc_Simulate. Note 
+**7A:** Array image and informal observations kindly supplied by P. Troyk and G. Dagnelie. For the rest of the images run Simulate_WFMA.m
+**7B and 7C** Run Phosphene_Sz_vs_Ecc_Simulate. Note that to get the specifc phosphenes you will want to only simulate for one eccentricty/location.
 
 ## Figure 8
 **For 8A, 8B, and 8C:**
