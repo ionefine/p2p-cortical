@@ -34,17 +34,32 @@ Note that some small editions were added in photoshop.
 **3C:** Run Winawer_Brightness_Neuron2016.m
 
 ## Figure 4
-**4A, 4B, 4C:** Run Winawer_Size_Neuron2016.m
+**4A, 4B, 4C:** Run Winawer_Size_Neuron2016.m  
 **4D:**  Left panel replotted from 
 Bosking, W. H., Beauchamp, M. S. & Yoshor, D. Electrical stimulation of visual cortex: Relevance for the development of visual cortical prosthetics. Annu. Rev. Vis. Sci. 3, 141–166. https://doi.org/10.1146/annurev-vision-111815-114525 (2017).  
-Right Panel shows corresponding simulations for two eccentricities. Run Phosphene_Sz_vs_Ecc_Simulate.m
-
+Right Panel shows corresponding simulations for two eccentricities. Bosking_SizeAmplitude_JNeuro2017.m
 
 ## Figure 5
-**5A:**  Anatomical panel replotted from Neuron, 92/6, J. Winawer and J. Parvizi, linking electrical stimulation of human primary visual cortex, size of affected cortical area, Neuronal Responses, and Subjective Experience, Fig. 1A, Copyright (2016), with permission from Elsevier. 
+**5A:**  Anatomical panel from Neuron, 92/6, J. Winawer and J. Parvizi, linking electrical stimulation of human primary visual cortex, size of affected cortical area, Neuronal Responses, and Subjective Experience, Fig. 1A, Copyright (2016), with permission from Elsevier. 
 
 The white panels show single typical phosphene replotted from from Winawer, J. & Parvizi, J. Linking electrical stimulation of human primary visual cortex, size of affected cortical area, neuronal
-responses, and subjective experience. Neuron 92, 1213–1219. https://doi.org/10.1016/j.neuron.2016.11.008 (2016).
+responses, and subjective experience. Neuron 92, 1213–1219. https://doi.org/10.1016/j.neuron.2016.11.008 (2016).  
 
-**5B:** Run Bosking
+**5B:** Run Bosking_SizeEccentricity_JNeuro2017.m
+
+## Figure 6
+**6A:** Replotted from Beauchamp, M. S. et al. Dynamic stimulation of visual cortex produces form vision in sighted and blind humans. Cell 181, 774-783e775. https://doi.org/10.1016/j.cell.2020.04.033 (2020).
+**6B:** Run BeauchampFig4.m
+**6C:** Run Beauchamp_DynamicLetters_Cell2020_RF.m and Beauchamp_DynamicLetters_Cell2020_movie.m
+
+## Figure 7
+**7B and 7C** Run Phosphene_Sz_vs_Ecc_Simulate. Note 
+
+## Figure 8
+**For 8A, 8B, and 8C:**
+Run Array_Sim_call.m which calls Array_Sim_main.m and Array_Sim_movie.m Array_Sim_main.m creates the first two panels. Array_Sim_movie creates the third. The cat image is a frame from CatNotCooperating.m4v or CatNotCooperating.avi.
+
+
+
+
 
