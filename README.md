@@ -15,7 +15,7 @@ Getting started
 ===============
 
 The bulk of the routines in p2p-cortical are in the Methods file p2p_c.
-Example files to get you started are described in the site wiki.
+Example files to get you started are described in the site wiki as well. Additionally, many of the files produce figures from the paper, but can be adapted for other things.
 
 Figures in the paper
 ===============
