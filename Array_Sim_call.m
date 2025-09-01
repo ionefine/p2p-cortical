@@ -1,0 +1,13 @@
+% use this function to run Array_Sim_main and Array_Sim_movie functions
+% to simulate various arrays eletrode arrays and examine what
+% the perceptual experience would be.
+
+
+array.spaceFac  = 1;
+%array.arrayList = {'optimal','regular_cortex','regular_visualfield'};
+array.arrayList = {'optimal'};
+array.esize     = 'large';          % or 'small'
+array = Array_Sim_main(array);
+
+
+% array2 = Array_Sim_movie(array);
