@@ -20,7 +20,7 @@ Example files to get you started are described in the site wiki.
 Figures in the paper
 ===============
 
-To produce the figures in the paper use the following files:
+To produce the figures in the paper use the following files. You may get slightly different figures due to the inherent randomness in the modeling or also possibly slight tweaks made to the models.
 
 ## Figure 1
 To be updated. Not in GitHub repo yet. 
