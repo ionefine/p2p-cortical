@@ -104,9 +104,9 @@ for rad = 1:length(radList)
         eccentricity(rad, ecc, r) = eccList(ecc);
 
         %disp(r)
-        fprintf('sigma: %.4f\n', p.sigma);
-        disp(['sigma slice at r = ', num2str(r)]);
-        disp(sigma(:, :, r));
+        %fprintf('sigma: %.4f\n', p.sigma);
+        %disp(['sigma slice at r = ', num2str(r)]);
+        %disp(sigma(:, :, r));
         end
     end
 end
