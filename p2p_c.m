@@ -12,6 +12,485 @@
 classdef p2p_c
     methods(Static)
         %% definitions - temporal properties
+     
+        function trl = define_trial(tp, varargin)
+            % creates a pulse train for a given trial
+            % takes as input:
+            %  tp - the temporal parameters of the model (at a minimum
+            %  needs tp.dt, the temporal sampling)
+            %  [trl] if you want to preset some trial values
+            %  If you don't want to use a temporal model, set the freq to
+            %  NaN
+            %
+            % commented 12/7/2024 IF
+            % commented 6/24/2024 ES
+
+            % if no trl struct passed create one, else use passed struct
+            if nargin < 2;  trl = [];
+            else; trl = varargin{1}; end
+
+            % set default electrode index
+            if ~isfield(trl,'e'); trl.e = 1; end
+
+            % set electrical stimulation and simulation durations
+            % durations are all in seconds
+            if ~isfield(trl, 'dur');    trl.dur = 1000*10^-3;   end % electrical stimulation duration
+            if ~isfield(trl, 'simdur');    trl.simdur = 3 ;   end % simulation duration, needs to be
+            % longer to allow time for the neural response
+
+            % construct time vector
+            trl.t = 0:tp.dt:trl.dur-tp.dt;
+
+            % define pulse parameters
+            if ~isfield(trl, 'pw');     trl.pw = .1 * 10^-3;    end % pulse width
+            if ~isfield(trl, 'ip');     trl.ip = 0;             end % interphase delay
+            if ~isfield(trl, 'lag');    trl.lag = 2*trl.pw;     end % delay before the pulse train begins
+            if ~isfield(trl, 'order');  trl.order = 1;          end % 1 = cathodic first, -1  = anodic first
+            if ~isfield(trl, 'freq');   trl.freq = 60;          end % NaN if not using a temporal model
+            if ~isfield(trl, 'amp');    trl.amp = 100;          end % current amplitude in microAmps
+
+            % generate pulse train
+            trl = p2p_c.generate_pt(trl, tp);
+
+            % calculate charges
+            trl.CperTrial = (trl.amp/1000) * trl.dur * trl.freq * trl.pw*10.^3; % charge per trial
+            trl.CperPulse = trl.pw * trl.amp/1000; % charge per pulse
+        end
+
+        function trl = generate_pt(trl, tp)
+            % generate pulse train given trial parameters
+            % and temporal model parameters
+            % commented 6/24/2024 ES
+
+            % if 'trl.on' and 'trl.off' specified convert to lag and duration
+            if isfield(trl, 'on')
+                trl.lag = trl.on;
+                trl.dur = trl.off-trl.on;
+            end
+
+            if isnan(trl.freq)
+                % if all you are interested in is space then don't use a
+                % temporal model at all, space and time are separable and
+                % it's much faster
+                trl.pt = 1;
+            else
+                if trl.ip == 0  % no interoase delay
+                    on =  mod(trl.t,1/trl.freq) <=(trl.pw*2); % turn it on on
+                    off = mod(trl.t-trl.pw,1/trl.freq) <=trl.pw & on;  % '& on' hack added by gmb;
+                    tmp  = trl.amp.*(on-(2*off));
+                else
+                    on =  mod(trl.t,1/trl.freq) <trl.pw;
+                    delay =  (trl.pw+trl.ip); % time difference between on and off
+                    off = mod(trl.t-delay,1/trl.freq) < trl.pw;
+                    tmp  = trl.amp.*(on-off);
+                end
+
+                lag = round(trl.lag/tp.dt); % delay before beginning the pulse train (frames)
+                trl.pt= zeros(1, lag+length(tmp));
+                trl.pt(lag+1:lag+length(tmp))=tmp;
+
+                trl.t = 0:tp.dt:(trl.dur+trl.lag); % include the lag
+                trl.t = trl.t(1:end-1);
+            end
+            if trl.dur<trl.simdur % usually we simulate a little longer than the trial, to allow for the response
+                trl.pt((end+1):round((trl.simdur/tp.dt))) = 0;
+                trl.t = 0:tp.dt:trl.simdur-tp.dt;
+            end
+ 
+        end
+
+        function [tp, nc] = define_temporalparameters(varargin)
+            % defines the parameters of the temporal model, defaults are
+            % based on Fine and Boynton, 2024
+            % https://www.nature.com/articles/s41598-024-65337-1#citeas
+            %
+            % commented 12/7/2024 IF
+
+            if nargin<1
+                tp = [];
+            else
+                tp = varargin{1};
+            end
+
+            % parameters controlling the first stage of rapid integration
+            % of current by cell, describes the effect of changing pulse
+            % width
+            if ~isfield(tp, 'dt');       tp.dt = .001 * 10^-3; end % Represents time sampling in ms, should be no larger than 1/10 of tau1
+            if ~isfield(tp, 'tau1');   tp.tau1 = 0.0003; end    % First stage temporal integrator fixed based on Nowak and Bullier, 1998, 10.1007/s002210050304
+            if ~isfield(tp, 'refrac');   tp.refrac = 100; end  % Extent of attenuation for spiking refractory period
+            %if ~isfield(tp, 'refrac');   tp.refrac = 50; end
+            if ~isfield(tp, 'delta');   tp.delta = 0.001; end  % Decay parameter for refractory period
+
+            % parameters controlling slower second stages of integration,
+            % describes the effect of changing the frequency, this model
+            % isn't great
+            if ~isfield(tp, 'tSamp');   tp.tSamp = 1000; end % Subsampling to speed things up
+            if ~isfield(tp, 'tau2');   tp.tau2 =  0.025; end  % Slower second stage of integration
+            %if ~isfield(tp, 'tau2');   tp.tau2 =  0.15; end
+            if ~isfield(tp, 'ncascades');  tp.ncascades = 3;   end % number of cascades in the slow filter of the temporal convolution
+            if ~isfield(tp, 'gammaflag');   tp.gammaflag = 1;   end            %  include second stage gamma
+
+
+            % leak out of charge accumulation
+            % https://iopscience.iop.org/article/10.1088/1741-2560/8/6/066007/pdf
+            % Frequency-dependent reduction of voltage-gated sodium current modulates retinal ganglion cell response rate to electrical stimulation
+            %  David Tsai et al 2011 J. Neural Eng. 8 066007,
+            %  Table 1 In = (1 − α) × e−kn + α,
+            tp.Na_recovery = 0.015; % how quickly adaptation recovers
+            tp.Na_strength = .2;    % how strongly the adaptation attenuates Sodium (Na) currents
+
+            % nonlinearity response parameters
+            if ~isfield(tp, 'spikemodel')
+                tp.spikemodel = 'convolve';
+            end
+
+            if strcmp(tp.spikemodel, 'convolve')
+                if ~isfield(tp, 'model');   tp.model = 'compression';   end
+                if ~isfield(tp, 'sc_in');   tp.sc_in = 0.5663;   end
+            elseif strcmp(tp.spikemodel, 'integratefire')
+                if ~isfield(tp, 'model');   tp.model = 'compression';   end
+                if ~isfield(tp, 'sc_in');   tp.sc_in = .5663;  end % 10000/3;   end
+            else
+                error('model variant not defined, should be "compression" or "linear"');
+            end
+
+            if strcmp(tp.model, 'compression')
+                if ~isfield(tp, 'power'); tp.power =  15.5901; end % chosen cos max brightness rating
+                if ~isfield(tp, 'sc_out'); tp.sc_out = 10; end % fit using Winawer brightness data
+            elseif strcmp(tp.model, 'sigmoid')
+                disp('using sigmoid semisaturation constant')
+                tp.asymptote = 2000;
+                tp.e50 = 500; % electrical semisaturation constant
+            elseif strcmp(tp.model, 'normcdf')
+                disp('using normcdf semisaturation constant')
+                tp.asymptote = 1500;
+                tp.mean = 750;
+                tp.sigma = 175;
+            elseif strcmp(tp.model, 'weibull')
+                disp('using weibull semisaturation constant')
+                tp.asymptote = 1000;
+                tp.thresh = 600;
+                tp.beta = 3.5;
+            end
+        end
+        
+%% Cortical and Visual Space
+
+        function c = define_cortex(c)
+            % defines the parameters of the cortical sheet and the models
+            % that define what the receptive fields will look like
+            %
+            % commented 12/7/2024 IF
+
+            % typical log z transformation parameters (based on early
+            % Schwartz model
+            if ~isfield(c, 'efthr'); c.efthr = 0.05; end % electric field values below this are assumed to be zero
+            if ~isfield(c, 'animal') ;  c.animal = 'human'; end
+            if strcmp(c.animal, 'human')
+                c.k = 15; %imcale
+                if ~isfield(c, 'a'); c.a = 0.5; end %fovea expansion for human, macaque is 0.3
+                c.shift = c.k*log(c.a);
+                if ~isfield(c, 'squish');   c.squish = 1;  end % some cortices are just a little rounder than others, no judgment
+                if ~isfield(c, 'cortexHeight'); c.cortexHeight = [-40,40]; end %[height in mm of cortex, 0 is midline)
+                if ~isfield(c, 'cortexLength'); c.cortexLength = [-5, 80]; end %[length in mm of cortex, 0 is fovea)
+                if ~isfield(c, 'pixpermm');  c.pixpermm = 8; end    % choose the resolution to sample in mm.
+            elseif strcmp(c.animal, 'macaque')
+                c.k = 5; c.squish = 1; %scale
+                c.a = 0.3; % values set by eyeballing Toottell data
+                c.shift = c.k*log(c.a);
+                if ~isfield(c, 'cortexHeight'); c.cortexHeight = [-20,20]; end %[height in mm of cortex, 0 is midline)
+                if ~isfield(c, 'cortexLength'); c.cortexLength = [-5,30]; end %[length in mm of cortex, 0 is fovea)
+                if ~isfield(c, 'pixpermm');  c.pixpermm = 8; end    % choose the resolution to sample in mm.
+            elseif strcmp(c.animal, 'mouse')
+                errordlg('Sorry no model for mouse yet');
+                %c.k = 1/40; % scale Garrett, 2014 FOR V1 how many mm of cortex represents 1 degree of visual field
+            end
+
+            % size and structure of receptive fields
+
+            if ~isfield(c, 'rfmodel');   c.rfmodel = 'ringach';  end
+            if ~isfield(c, 'rfsizemodel')
+                c.rfsizemodel = 'keliris';  %  estimate of how sizes of rfs change as a function of eccentricity Keliris et al. PNAS 2019, 10.1073/pnas.1809612116
+            end
+            if strcmp(c.animal, 'human')
+                if strcmp(c.rfsizemodel, 'keliris') % using Keliris electrophysiology from supplementary table 1
+                    c.slope = 0.08; % 0.05; % in terms of sigma of a Gaussian
+                    c.intercept = 0.16; % 0.69;
+                    c.min = 0;
+                elseif strcmp(c.rfsizemodel, 'bosking') %  Saturation in Phosphene Size with Increasing Current Levels Delivered to Human Visual Cortex, Bosking et al. J Neurosci 2017
+                    c.slope =   .2620/2; % Bosking data is in terms of diameter, so take the values from Figure 4 (slope = 0.2620 and intercept  = 0.1787) and divide by 2
+                    c.intercept = .1787/2;
+                    c.min = 0;
+                elseif strcmp(c.rfsizemodel, 'winawer')
+                    c.slope = .1667;
+                    c.min = 1.11;
+                    c.intercept =  0.0721;
+                end
+            elseif strcmp(c.animal, 'macaque')
+                if strcmp(c.rfsizemodel, 'keliris')
+                    c.slope =  0.08; % in terms of sigma
+                    c.intercept = 0.16;
+                    c.min = 0;
+                else
+                    c.slope =  0.06; % in terms of sigma
+                    c.intercept = 0.42;
+                    c.min = 0;
+                end
+            elseif strcmp(c.animal, 'mouse') %
+                errordlg('mouse model isn''t defined')
+                c.intercept = 20;  % Check this ezgi
+            end
+
+            % size and structure of receptive fields
+            if ~isfield(c,'ar'); c.ar = 0.25; end % aspect ratio elongated rfs, based on Ringach 2002, J. Neurophysiology, 10.1152/jn.2002.88.1.455
+
+            if ~isfield(c, 'delta'); c.delta = 2; end % this describes the distribution describing the separation between on and off receptive fields, Based Mata & Ringach, 2005 10.1152/jn.00668.2004
+
+            if ~isfield(c, 'onoff_ratio'); c.onoff_ratio  = 0.8; end % off cells contribute less to perception than on cells
+
+            % Ocular dominance structure based on Adams et al. 2007, 10.1523/JNEUROSCI.2923-07.2007
+            if ~isfield(c, 'sig'); c.sig = .5;  end % The larger sig, the more the distribution of ocular dominance columns tends toward being 0 or 1
+            if strcmp(c.animal, 'human')
+                c.ODsize = 0.863; % Adams 2007 Complete pattern of ocular dominance columns in human primary visual cortex, average width of a column in mm
+                c.filtSz = 3; % 3mm creates the initial OD and orientation maps
+            elseif strcmp(c.animal, 'macaque')
+                c.ODsize = 0.531; % Adams 2007 Complete pattern of ocular dominance columns in human primary visual cortex, average width of a column in mm
+                c.filtSz = 1.85; % 3mm creates the initial OD and orientation maps
+            elseif strcmp(c.animal, 'mouse')
+                c.ODsize = NaN; % Adams 2007 Complete pattern of ocular dominance columns in human primary visual cortex, average width of a column in mm
+                c.filtSz = NaN; % 3mm creates the initial OD and orientation maps
+            end
+
+            c.gridColor = [1,1,0]; % for drawing lines on cortex.
+        end
+
+        function [c, v] = define_electrodes(c, v)
+            %  Takes in the position of the electrodes (can take multiple) in visual
+            %  co-ordinates and pops them onto the cortical surface
+            %  Note that there is a 'sister function' c2v_define_electrodes
+            %  that takes electrodes on the cortical surface and pops them
+            %  onto the visual space
+            %
+            %  commented 12/7/2024 IF
+            %  edited/sped up 6/26/2025 ES
+            %  commented 6/26/2025 ES
+
+            idx = 1:length(v.e);
+            if ~isfield(c, 'e') || ~isfield(c.e, 'radius')
+                for ii=1:length(idx);        c.e(idx(ii)).radius = 500/1000;       end
+            end
+            if ~isfield(c.e, 'shape')
+                for ii=1:length(idx);     c.e(idx(ii)).shape = 'round';    end
+            end
+            if ~isfield(v.e, 'ang')  % if putting in x, y co-ordinates rather than ang and ecc which is the default
+                for ii = 1:length(idx)
+                    [a, e]= cart2pol(v.e(idx(ii)).x, v.e(idx(ii)).y);
+                    v.e(idx(ii)).ang = a*180/pi;
+                    v.e(idx(ii)).ecc = e;
+                end
+            end
+
+            % convert angle and eccentricity to x and y coordinates
+            [x_all, y_all] = pol2cart([v.e.ang]*pi/180, [v.e.ecc]);
+            for ii = 1:length(idx)
+                v.e(ii).x = x_all(ii); v.e(ii).y = y_all(ii);
+            end
+
+            % compute area of electrodes
+            % convert electrode visual field coordinates to cortical coordinates
+            areas = pi * [c.e.radius].^2;
+            vx = [v.e.x]; vy = [v.e.y];
+            [cx, cy] = p2p_c.v2c_real(c, vx, vy);
+            for ii = 1:length(idx)
+                c.e(ii).area = areas(ii);
+                c.e(ii).x = cx(ii);
+                c.e(ii).y = cy(ii);
+            end
+        end
+
+        function v = define_visualmap(v)
+            % defines the height, width, resoltion etc of the visual field that is being simulated
+            %
+            % commented 12/7/2024 IF
+            % commented 6/30/2025 ES
+
+            % set defaults
+            if ~isfield(v, 'visfieldHeight'); v.visfieldHeight = [-30 30]; end
+            if ~isfield(v, 'visfieldWidth'); v.visfieldWidth = [-30 30]; end
+            if ~isfield(v,'pixperdeg');     v.pixperdeg = 7;       end
+            if ~isfield(v, 'drawthr');     v.drawthr = 1;    end % assumes patients draw percepts when brightness>1
+
+            % generate 1D array
+            v.x = linspace(v.visfieldWidth(1),v.visfieldWidth(2), (v.visfieldWidth(2)-v.visfieldWidth(1)).*v.pixperdeg);
+            v.y = linspace(v.visfieldHeight(1),v.visfieldHeight(2), (v.visfieldHeight(2)-v.visfieldHeight(1)).*v.pixperdeg);
+
+            % define 2D grid
+            [v.X,v.Y] = meshgrid(v.x, v.y);
+
+            % Make the grid in retinal coordinates
+            if ~isfield(v, 'angList');   v.angList = -90:45:90;    end
+            if ~isfield(v, 'eccList');  v.eccList = [1 2 3 5 8 13 21 34];    end
+            v.gridColor = [1 1 0];
+            v.n = 201;
+        end
+
+        function v = c2v_define_electrodes(c,v)
+            % If you've defined electrodes (can take multiple) on cortex, this projects them
+            % into visual space. Note that there is a 'sister function' define_electrodes
+            %  that takes electrodes in visual space and pops them
+            %  onto the cortical surface
+            %
+            %  commented 12/7/2024 IF
+            %  edited/sped up 6/26/2025 ES
+            %  commented 6/26/2025 ES
+
+            %
+            idx = 1:length(c.e);
+
+            % map cortical to visual
+            [vx, vy] = p2p_c.c2v_real(c,[c.e.x],[c.e.y]);
+
+            % convert to polar coordinates
+            [angs, eccs] = cart2pol(vx, vy);
+            angs = angs * 180 / pi;
+
+            % assign back to v.e
+            for ii = 1:length(idx)
+                v.e(ii).x = vx(ii);
+                v.e(ii).y = vy(ii);
+                v.e(ii).ang = angs(ii);
+                v.e(ii).ecc = eccs(ii);
+            end
+        end
+
+
+        function [c, v] = generate_corticalmap(c, v)
+            % creates cortical maps for:
+            %       ocular dominance (c.ODmap)
+            %       orientation (c.ORmap)
+            %       rf size (c.RFsizemap)
+            %       on vs. off (c.ONOFFmap)
+            %       distance between on and off subunits, small values represent complex cells, larger represent simple (c.DISTmap)
+            %
+            % commented 12/7/2024 IF
+
+            % define cortex meshgrid
+            c.x = linspace(min(c.cortexLength),max(c.cortexLength), (max(c.cortexLength)-min(c.cortexLength))*c.pixpermm);
+            c.y = linspace(min(c.cortexHeight),max(c.cortexHeight), (max(c.cortexHeight)-min(c.cortexHeight))*c.pixpermm);
+            [c.X,c.Y] = meshgrid(c.x,c.y);
+            sz = size(c.X);
+
+            % Make the orientation and OD maps by bandpassing random noise
+
+            % Rojer and Schwartz' method of bandpassing random noise:
+            % Rojer, A.S. and E.L. Schwartz, Cat and monkey cortical columnar patterns
+            %modeled by bandpass-filtered 2D white noise. Biol Cybern, 1990. 62(5): c. 381-91.
+            %Make random noise: complex numbers where the angle is the orientation
+            Z = exp(sqrt(-1)*rand(sz)*pi*2);
+
+            % filter the noise to create initial columns
+            freq = 1/c.ODsize; %cycles/mm (Try zero for big columns)
+            filtPix = ceil(c.filtSz*c.pixpermm);
+            [X,Y] = meshgrid(linspace(-c.filtSz/2,c.filtSz/2,filtPix),linspace(-c.filtSz/2,c.filtSz/2,filtPix));
+            R = sqrt(X.^2+Y.^2);
+            FILT = exp(-R.^2/c.sig.^2).*cos(2*pi*freq*R);  %Gabor
+
+            % Convolve z with the filter
+            W = conv2(Z,FILT,'same');
+            c.ORmap = angle(W);
+            WX = gradient(W);
+            Gx = angle(WX);
+            c.ODmap = normcdf(Gx*c.sig);
+
+
+            % Make the on and off  maps by bandpassing random noise
+            % The idea that these vary smoothly is based on
+            % Najafian, S., Koch, E., Teh, K.L. et al. A theory of cortical map formation in the visual brain.
+            % Nat Commun 13, 2303 (2022). https://doi.org/10.1038/s41467-022-29433-y
+            % in this paper the maps are related to orientation and ocular
+            % dominance, but because that doesn't matter for our
+            % simulations we're just generating new maps
+
+            % filter the noise to create initial columns
+            freq = 1/c.ODsize *2; %cycles/mm, doubling the frequency
+            filtPix = ceil(c.filtSz/2*c.pixpermm);
+            [X,Y] = meshgrid(linspace(-c.filtSz/2,c.filtSz/2,filtPix),linspace(-c.filtSz/2,c.filtSz/2,filtPix));
+            R = sqrt(X.^2+Y.^2);
+            FILT = exp(-R.^2/c.sig.^2).*cos(2*pi*freq*R);  %Gabor
+
+            %Convolve z with the filter
+            W = conv2(Z,FILT,'same');
+            u = (angle(W)/(pi)); % distance map
+            tmp = zeros(size(u));
+            tmp(u>0) = -log(u(u>0))/c.delta; % exponential fall of of d, as described by Mata & Ringach 2005
+            tmp(u<0) = log(-u(u<0))/c.delta;
+            c.DISTmap = tmp;
+            WX = gradient(W);
+            Gx = angle(WX);
+            c.ONOFFmap = normcdf(Gx*c.sig);
+
+            % create angle and eccentricity maps
+            [c.v.X ,  c.v.Y] = p2p_c.c2v_real(c, c.X, c.Y);
+            [c.v.ANG, c.v.ECC] = cart2pol(c.v.X,c.v.Y);
+            c.v.ANG = c.v.ANG *180/pi;
+
+            % create a mesh
+            v.zAng = linspace(0,max(v.eccList),v.n)'*exp(sqrt(-1)*v.angList*pi/180);
+            c.v.gridAng = p2p_c.v2c_cplx(c, v.zAng);
+
+            v.zEcc = (v.eccList'*exp(sqrt(-1)*linspace(-90,90,v.n)*pi/180))';
+            c.v.gridEcc = p2p_c.v2c_cplx(c, v.zEcc);
+            c.RFsizemap = max(c.slope.* abs(c.v.ECC) + c.intercept, c.min);
+
+            %if ~isfield(c, 'cropPix')
+            c.cropPix  = c.v.ANG;
+            c.cropPix(c.v.ECC>max([max(v.visfieldHeight) max(v.eccList)]))=NaN;
+            if abs(min(c.cortexLength))<abs(max(c.cortexLength))
+                c.cropPix(c.X<0) = NaN;
+            elseif abs(min(c.cortexLength))>abs(max(c.cortexLength))
+                c.cropPix(c.X>0) = NaN;
+            end
+            %end
+        end
+
+        function [c] = generate_ef(c, varargin)
+            % generates an electric field for each electrode on the
+            % cortical surface (can take multiple at a time as input)
+            % max electric field is normalized to 1 at this point
+            %
+            % commented 12/7/2024 IF
+            % commented 6/26/2025 ES
+
+            idx = 1:length(c.e);
+
+            % set default electric field model if not specified
+            if ~isfield(c, 'emodel')
+                c.emodel = 'Tehovnik';      end
+
+            for ii=1:length(idx)
+                % compute distance matrix R from electrode center to each cortical grid point
+                R=sqrt((c.X-c.e(idx(ii)).x).^2+(c.Y-c.e(idx(ii)).y).^2);
+
+                % subtract radius to get effective distance; clamp to 0 when within electrode
+                Rd = R-c.e(idx(ii)).radius; Rd(Rd<0) = 0;
+
+                % initialize electric field
+                pt_ef = ones(size(c.X));
+
+                % compute electric field based on selected model
+                if strcmp(c.emodel, 'Tehovnik')
+                    % https://doi.org/10.1152/jn.00126.2006
+                    if ~isfield(c, 'I_0');     c.I_0  = 1; end
+                    if ~isfield(c, 'I_k');     c.I_k  = 6.75; end % controls rate of decay of current spread in cm
+                    pt_ef=c.I_0./(1+c.I_k*Rd.^2);
+                else
+                    errordlg('electric field model not specified in code');
+                end
+                c.e(idx(ii)).ef = uint8(255.*pt_ef./max(pt_ef(:))); % uint8 to save space when making movies
+            end
+        end
+
+        %% Cortical Response Simulation
 
         function [v, c] = generate_corticalelectricalresponse(c, v)
             % generates a percept by taking the sum of receptive fields activated by an electrode
@@ -145,405 +624,6 @@ classdef p2p_c
             end
         end
 
-        function trl = define_trial(tp, varargin)
-            % creates a pulse train for a given trial
-            % takes as input:
-            %  tp - the temporal parameters of the model (at a minimum
-            %  needs tp.dt, the temporal sampling)
-            %  [trl] if you want to preset some trial values
-            %  If you don't want to use a temporal model, set the freq to
-            %  NaN
-            %
-            % commented 12/7/2024 IF
-            % commented 6/24/2024 ES
-
-            % if no trl struct passed create one, else use passed struct
-            if nargin < 2;  trl = [];
-            else; trl = varargin{1}; end
-
-            % set default electrode index
-            if ~isfield(trl,'e'); trl.e = 1; end
-
-            % set electrical stimulation and simulation durations
-            % durations are all in seconds
-            if ~isfield(trl, 'dur');    trl.dur = 1000*10^-3;   end % electrical stimulation duration
-            if ~isfield(trl, 'simdur');    trl.simdur = 3 ;   end % simulation duration, needs to be
-            % longer to allow time for the neural response
-
-            % construct time vector
-            trl.t = 0:tp.dt:trl.dur-tp.dt;
-
-            % define pulse parameters
-            if ~isfield(trl, 'pw');     trl.pw = .1 * 10^-3;    end % pulse width
-            if ~isfield(trl, 'ip');     trl.ip = 0;             end % interphase delay
-            if ~isfield(trl, 'lag');    trl.lag = 2*trl.pw;     end % delay before the pulse train begins
-            if ~isfield(trl, 'order');  trl.order = 1;          end % 1 = cathodic first, -1  = anodic first
-            if ~isfield(trl, 'freq');   trl.freq = 60;          end % NaN if not using a temporal model
-            if ~isfield(trl, 'amp');    trl.amp = 100;          end % current amplitude in microAmps
-
-            % generate pulse train
-            trl = p2p_c.generate_pt(trl, tp);
-
-            % calculate charges
-            trl.CperTrial = (trl.amp/1000) * trl.dur * trl.freq * trl.pw*10.^3; % charge per trial
-            trl.CperPulse = trl.pw * trl.amp/1000; % charge per pulse
-        end
-
-        function trl = generate_pt(trl, tp)
-            % generate pulse train given trial parameters
-            % and temporal model parameters
-            % commented 6/24/2024 ES
-
-            % if 'trl.on' and 'trl.off' specified convert to lag and duration
-            if isfield(trl, 'on')
-                trl.lag = trl.on;
-                trl.dur = trl.off-trl.on;
-            end
-
-            if isnan(trl.freq)
-                % if all you are interested in is space then don't use a
-                % temporal model at all, space and time are separable and
-                % it's much faster
-                trl.pt = 1;
-            else
-                if trl.ip == 0  % no interoase delay
-                    on =  mod(trl.t,1/trl.freq) <=(trl.pw*2); % turn it on on
-                    off = mod(trl.t-trl.pw,1/trl.freq) <=trl.pw & on;  % '& on' hack added by gmb;
-                    tmp  = trl.amp.*(on-(2*off));
-                else
-                    on =  mod(trl.t,1/trl.freq) <trl.pw;
-                    delay =  (trl.pw+trl.ip); % time difference between on and off
-                    off = mod(trl.t-delay,1/trl.freq) < trl.pw;
-                    tmp  = trl.amp.*(on-off);
-                end
-
-                lag = round(trl.lag/tp.dt); % delay before beginning the pulse train (frames)
-                trl.pt= zeros(1, lag+length(tmp));
-                trl.pt(lag+1:lag+length(tmp))=tmp;
-
-                trl.t = 0:tp.dt:(trl.dur+trl.lag); % include the lag
-                trl.t = trl.t(1:end-1);
-            end
-            if trl.dur<trl.simdur % usually we simulate a little longer than the trial, to allow for the response
-                trl.pt((end+1):round((trl.simdur/tp.dt))) = 0;
-                trl.t = 0:tp.dt:trl.simdur-tp.dt;
-            end
- 
-        end
-
-        function c = define_cortex(c)
-            % defines the parameters of the cortical sheet and the models
-            % that define what the receptive fields will look like
-            %
-            % commented 12/7/2024 IF
-
-            % typical log z transformation parameters (based on early
-            % Schwartz model
-            if ~isfield(c, 'efthr'); c.efthr = 0.05; end % electric field values below this are assumed to be zero
-            if ~isfield(c, 'animal') ;  c.animal = 'human'; end
-            if strcmp(c.animal, 'human')
-                c.k = 15; %imcale
-                if ~isfield(c, 'a'); c.a = 0.5; end %fovea expansion for human, macaque is 0.3
-                c.shift = c.k*log(c.a);
-                if ~isfield(c, 'squish');   c.squish = 1;  end % some cortices are just a little rounder than others, no judgment
-                if ~isfield(c, 'cortexHeight'); c.cortexHeight = [-40,40]; end %[height in mm of cortex, 0 is midline)
-                if ~isfield(c, 'cortexLength'); c.cortexLength = [-5, 80]; end %[length in mm of cortex, 0 is fovea)
-                if ~isfield(c, 'pixpermm');  c.pixpermm = 8; end    % choose the resolution to sample in mm.
-            elseif strcmp(c.animal, 'macaque')
-                c.k = 5; c.squish = 1; %scale
-                c.a = 0.3; % values set by eyeballing Toottell data
-                c.shift = c.k*log(c.a);
-                if ~isfield(c, 'cortexHeight'); c.cortexHeight = [-20,20]; end %[height in mm of cortex, 0 is midline)
-                if ~isfield(c, 'cortexLength'); c.cortexLength = [-5,30]; end %[length in mm of cortex, 0 is fovea)
-                if ~isfield(c, 'pixpermm');  c.pixpermm = 8; end    % choose the resolution to sample in mm.
-            elseif strcmp(c.animal, 'mouse')
-                errordlg('Sorry no model for mouse yet');
-                %c.k = 1/40; % scale Garrett, 2014 FOR V1 how many mm of cortex represents 1 degree of visual field
-            end
-
-            % size and structure of receptive fields
-
-            if ~isfield(c, 'rfmodel');   c.rfmodel = 'ringach';  end
-            if ~isfield(c, 'rfsizemodel')
-                c.rfsizemodel = 'keliris';  %  estimate of how sizes of rfs change as a function of eccentricity Keliris et al. PNAS 2019, 10.1073/pnas.1809612116
-            end
-            if strcmp(c.animal, 'human')
-                if strcmp(c.rfsizemodel, 'keliris') % using Keliris electrophysiology from supplementary table 1
-                    c.slope = 0.08; % 0.05; % in terms of sigma of a Gaussian
-                    c.intercept = 0.16; % 0.69;
-                    c.min = 0;
-                elseif strcmp(c.rfsizemodel, 'bosking') %  Saturation in Phosphene Size with Increasing Current Levels Delivered to Human Visual Cortex, Bosking et al. J Neurosci 2017
-                    c.slope =   .2620/2; % Bosking data is in terms of diameter, so take the values from Figure 4 (slope = 0.2620 and intercept  = 0.1787) and divide by 2
-                    c.intercept = .1787/2;
-                    c.min = 0;
-                elseif strcmp(c.rfsizemodel, 'winawer')
-                    c.slope = .1667;
-                    c.min = 1.11;
-                    c.intercept =  0.0721;
-                end
-            elseif strcmp(c.animal, 'macaque')
-                if strcmp(c.rfsizemodel, 'keliris')
-                    c.slope =  0.08; % in terms of sigma
-                    c.intercept = 0.16;
-                    c.min = 0;
-                else
-                    c.slope =  0.06; % in terms of sigma
-                    c.intercept = 0.42;
-                    c.min = 0;
-                end
-            elseif strcmp(c.animal, 'mouse') %
-                errordlg('mouse model isn''t defined')
-                c.intercept = 20;  % Check this ezgi
-            end
-
-            %% size and structure of receptive fields
-            if ~isfield(c,'ar'); c.ar = 0.25; end % aspect ratio elongated rfs, based on Ringach 2002, J. Neurophysiology, 10.1152/jn.2002.88.1.455
-
-            if ~isfield(c, 'delta'); c.delta = 2; end % this describes the distribution describing the separation between on and off receptive fields, Based Mata & Ringach, 2005 10.1152/jn.00668.2004
-
-            if ~isfield(c, 'onoff_ratio'); c.onoff_ratio  = 0.8; end % off cells contribute less to perception than on cells
-
-            % Ocular dominance structure based on Adams et al. 2007, 10.1523/JNEUROSCI.2923-07.2007
-            if ~isfield(c, 'sig'); c.sig = .5;  end % The larger sig, the more the distribution of ocular dominance columns tends toward being 0 or 1
-            if strcmp(c.animal, 'human')
-                c.ODsize = 0.863; % Adams 2007 Complete pattern of ocular dominance columns in human primary visual cortex, average width of a column in mm
-                c.filtSz = 3; % 3mm creates the initial OD and orientation maps
-            elseif strcmp(c.animal, 'macaque')
-                c.ODsize = 0.531; % Adams 2007 Complete pattern of ocular dominance columns in human primary visual cortex, average width of a column in mm
-                c.filtSz = 1.85; % 3mm creates the initial OD and orientation maps
-            elseif strcmp(c.animal, 'mouse')
-                c.ODsize = NaN; % Adams 2007 Complete pattern of ocular dominance columns in human primary visual cortex, average width of a column in mm
-                c.filtSz = NaN; % 3mm creates the initial OD and orientation maps
-            end
-
-            c.gridColor = [1,1,0]; % for drawing lines on cortex.
-        end
-
-        function [c] = generate_ef(c, varargin)
-            % generates an electric field for each electrode on the
-            % cortical surface (can take multiple at a time as input)
-            % max electric field is normalized to 1 at this point
-            %
-            % commented 12/7/2024 IF
-            % commented 6/26/2025 ES
-
-            idx = 1:length(c.e);
-
-            % set default electric field model if not specified
-            if ~isfield(c, 'emodel')
-                c.emodel = 'Tehovnik';      end
-
-            for ii=1:length(idx)
-                % compute distance matrix R from electrode center to each cortical grid point
-                R=sqrt((c.X-c.e(idx(ii)).x).^2+(c.Y-c.e(idx(ii)).y).^2);
-
-                % subtract radius to get effective distance; clamp to 0 when within electrode
-                Rd = R-c.e(idx(ii)).radius; Rd(Rd<0) = 0;
-
-                % initialize electric field
-                pt_ef = ones(size(c.X));
-
-                % compute electric field based on selected model
-                if strcmp(c.emodel, 'Tehovnik')
-                    % https://doi.org/10.1152/jn.00126.2006
-                    if ~isfield(c, 'I_0');     c.I_0  = 1; end
-                    if ~isfield(c, 'I_k');     c.I_k  = 6.75; end % controls rate of decay of current spread in cm
-                    pt_ef=c.I_0./(1+c.I_k*Rd.^2);
-                else
-                    errordlg('electric field model not specified in code');
-                end
-                c.e(idx(ii)).ef = uint8(255.*pt_ef./max(pt_ef(:))); % uint8 to save space when making movies
-            end
-        end
-
-        % generate functions
-        function [c, v] = generate_corticalmap(c, v)
-            % creates cortical maps for:
-            %       ocular dominance (c.ODmap)
-            %       orientation (c.ORmap)
-            %       rf size (c.RFsizemap)
-            %       on vs. off (c.ONOFFmap)
-            %       distance between on and off subunits, small values represent complex cells, larger represent simple (c.DISTmap)
-            %
-            % commented 12/7/2024 IF
-
-            % define cortex meshgrid
-            c.x = linspace(min(c.cortexLength),max(c.cortexLength), (max(c.cortexLength)-min(c.cortexLength))*c.pixpermm);
-            c.y = linspace(min(c.cortexHeight),max(c.cortexHeight), (max(c.cortexHeight)-min(c.cortexHeight))*c.pixpermm);
-            [c.X,c.Y] = meshgrid(c.x,c.y);
-            sz = size(c.X);
-
-            %% Make the orientation and OD maps by bandpassing random noise
-
-            % Rojer and Schwartz' method of bandpassing random noise:
-            % Rojer, A.S. and E.L. Schwartz, Cat and monkey cortical columnar patterns
-            %modeled by bandpass-filtered 2D white noise. Biol Cybern, 1990. 62(5): c. 381-91.
-            %Make random noise: complex numbers where the angle is the orientation
-            Z = exp(sqrt(-1)*rand(sz)*pi*2);
-
-            % filter the noise to create initial columns
-            freq = 1/c.ODsize; %cycles/mm (Try zero for big columns)
-            filtPix = ceil(c.filtSz*c.pixpermm);
-            [X,Y] = meshgrid(linspace(-c.filtSz/2,c.filtSz/2,filtPix),linspace(-c.filtSz/2,c.filtSz/2,filtPix));
-            R = sqrt(X.^2+Y.^2);
-            FILT = exp(-R.^2/c.sig.^2).*cos(2*pi*freq*R);  %Gabor
-
-            % Convolve z with the filter
-            W = conv2(Z,FILT,'same');
-            c.ORmap = angle(W);
-            WX = gradient(W);
-            Gx = angle(WX);
-            c.ODmap = normcdf(Gx*c.sig);
-
-
-            %% Make the on and off  maps by bandpassing random noise
-            % The idea that these vary smoothly is based on
-            % Najafian, S., Koch, E., Teh, K.L. et al. A theory of cortical map formation in the visual brain.
-            % Nat Commun 13, 2303 (2022). https://doi.org/10.1038/s41467-022-29433-y
-            % in this paper the maps are related to orientation and ocular
-            % dominance, but because that doesn't matter for our
-            % simulations we're just generating new maps
-
-            % filter the noise to create initial columns
-            freq = 1/c.ODsize *2; %cycles/mm, doubling the frequency
-            filtPix = ceil(c.filtSz/2*c.pixpermm);
-            [X,Y] = meshgrid(linspace(-c.filtSz/2,c.filtSz/2,filtPix),linspace(-c.filtSz/2,c.filtSz/2,filtPix));
-            R = sqrt(X.^2+Y.^2);
-            FILT = exp(-R.^2/c.sig.^2).*cos(2*pi*freq*R);  %Gabor
-
-            %Convolve z with the filter
-            W = conv2(Z,FILT,'same');
-            u = (angle(W)/(pi)); % distance map
-            tmp = zeros(size(u));
-            tmp(u>0) = -log(u(u>0))/c.delta; % exponential fall of of d, as described by Mata & Ringach 2005
-            tmp(u<0) = log(-u(u<0))/c.delta;
-            c.DISTmap = tmp;
-            WX = gradient(W);
-            Gx = angle(WX);
-            c.ONOFFmap = normcdf(Gx*c.sig);
-
-            % create angle and eccentricity maps
-            [c.v.X ,  c.v.Y] = p2p_c.c2v_real(c, c.X, c.Y);
-            [c.v.ANG, c.v.ECC] = cart2pol(c.v.X,c.v.Y);
-            c.v.ANG = c.v.ANG *180/pi;
-
-            % create a mesh
-            v.zAng = linspace(0,max(v.eccList),v.n)'*exp(sqrt(-1)*v.angList*pi/180);
-            c.v.gridAng = p2p_c.v2c_cplx(c, v.zAng);
-
-            v.zEcc = (v.eccList'*exp(sqrt(-1)*linspace(-90,90,v.n)*pi/180))';
-            c.v.gridEcc = p2p_c.v2c_cplx(c, v.zEcc);
-            c.RFsizemap = max(c.slope.* abs(c.v.ECC) + c.intercept, c.min);
-
-            %if ~isfield(c, 'cropPix')
-            c.cropPix  = c.v.ANG;
-            c.cropPix(c.v.ECC>max([max(v.visfieldHeight) max(v.eccList)]))=NaN;
-            if abs(min(c.cortexLength))<abs(max(c.cortexLength))
-                c.cropPix(c.X<0) = NaN;
-            elseif abs(min(c.cortexLength))>abs(max(c.cortexLength))
-                c.cropPix(c.X>0) = NaN;
-            end
-            %end
-        end
-
-        function v = define_visualmap(v)
-            % defines the height, width, resoltion etc of the visual field that is being simulated
-            %
-            % commented 12/7/2024 IF
-            % commented 6/30/2025 ES
-
-            % set defaults
-            if ~isfield(v, 'visfieldHeight'); v.visfieldHeight = [-30 30]; end
-            if ~isfield(v, 'visfieldWidth'); v.visfieldWidth = [-30 30]; end
-            if ~isfield(v,'pixperdeg');     v.pixperdeg = 7;       end
-            if ~isfield(v, 'drawthr');     v.drawthr = 1;    end % assumes patients draw percepts when brightness>1
-
-            % generate 1D array
-            v.x = linspace(v.visfieldWidth(1),v.visfieldWidth(2), (v.visfieldWidth(2)-v.visfieldWidth(1)).*v.pixperdeg);
-            v.y = linspace(v.visfieldHeight(1),v.visfieldHeight(2), (v.visfieldHeight(2)-v.visfieldHeight(1)).*v.pixperdeg);
-
-            % define 2D grid
-            [v.X,v.Y] = meshgrid(v.x, v.y);
-
-            % Make the grid in retinal coordinates
-            if ~isfield(v, 'angList');   v.angList = -90:45:90;    end
-            if ~isfield(v, 'eccList');  v.eccList = [1 2 3 5 8 13 21 34];    end
-            v.gridColor = [1 1 0];
-            v.n = 201;
-        end
-
-        function [c, v] = define_electrodes(c, v)
-            %  Takes in the position of the electrodes (can take multiple) in visual
-            %  co-ordinates and pops them onto the cortical surface
-            %  Note that there is a 'sister function' c2v_define_electrodes
-            %  that takes electrodes on the cortical surface and pops them
-            %  onto the visual space
-            %
-            %  commented 12/7/2024 IF
-            %  edited/sped up 6/26/2025 ES
-            %  commented 6/26/2025 ES
-
-            idx = 1:length(v.e);
-            if ~isfield(c, 'e') || ~isfield(c.e, 'radius')
-                for ii=1:length(idx);        c.e(idx(ii)).radius = 500/1000;       end
-            end
-            if ~isfield(c.e, 'shape')
-                for ii=1:length(idx);     c.e(idx(ii)).shape = 'round';    end
-            end
-            if ~isfield(v.e, 'ang')  % if putting in x, y co-ordinates rather than ang and ecc which is the default
-                for ii = 1:length(idx)
-                    [a, e]= cart2pol(v.e(idx(ii)).x, v.e(idx(ii)).y);
-                    v.e(idx(ii)).ang = a*180/pi;
-                    v.e(idx(ii)).ecc = e;
-                end
-            end
-
-            % convert angle and eccentricity to x and y coordinates
-            [x_all, y_all] = pol2cart([v.e.ang]*pi/180, [v.e.ecc]);
-            for ii = 1:length(idx)
-                v.e(ii).x = x_all(ii); v.e(ii).y = y_all(ii);
-            end
-
-            % compute area of electrodes
-            % convert electrode visual field coordinates to cortical coordinates
-            areas = pi * [c.e.radius].^2;
-            vx = [v.e.x]; vy = [v.e.y];
-            [cx, cy] = p2p_c.v2c_real(c, vx, vy);
-            for ii = 1:length(idx)
-                c.e(ii).area = areas(ii);
-                c.e(ii).x = cx(ii);
-                c.e(ii).y = cy(ii);
-            end
-        end
-
-        function v = c2v_define_electrodes(c,v)
-            % If you've defined electrodes (can take multiple) on cortex, this projects them
-            % into visual space. Note that there is a 'sister function' define_electrodes
-            %  that takes electrodes in visual space and pops them
-            %  onto the cortical surface
-            %
-            %  commented 12/7/2024 IF
-            %  edited/sped up 6/26/2025 ES
-            %  commented 6/26/2025 ES
-
-            %
-            idx = 1:length(c.e);
-
-            % map cortical to visual
-            [vx, vy] = p2p_c.c2v_real(c,[c.e.x],[c.e.y]);
-
-            % convert to polar coordinates
-            [angs, eccs] = cart2pol(vx, vy);
-            angs = angs * 180 / pi;
-
-            % assign back to v.e
-            for ii = 1:length(idx)
-                v.e(ii).x = vx(ii);
-                v.e(ii).y = vy(ii);
-                v.e(ii).ang = angs(ii);
-                v.e(ii).ecc = eccs(ii);
-            end
-        end
 
         % function [v, c] = generate_corticalvisualresponse_spatial(c, v)
         %     if ~isfield(c, 'rfmodel')
@@ -595,67 +675,15 @@ classdef p2p_c
         %     v.target.t = t;
         % end
 
-        function G = Gauss_2D(v,x0,y0,theta,sigma_x,sigma_y)
-            %Generates oriented 2D Gaussian on meshgrid v.X,v.Y
-            aa = cos(theta)^2/(2*sigma_x^2) + sin(theta)^2/(2*sigma_y^2);
-            bb = -sin(2*theta)/(4*sigma_x^2) + sin(2*theta)/(4*sigma_y^2);
-            cc = sin(theta)^2/(2*sigma_x^2) + cos(theta)^2/(2*sigma_y^2);
-            G = exp( - (aa*(v.X-x0).^2 + 2*bb*(v.X-x0).*(v.Y-y0) + cc*(v.Y-y0).^2));
-        end
-        
-        function [trl_array,v] = generate_phosphene_multiple(v, tp, trl_array)
-            % written 7/24/24 by ES
-            % arguments :
-            % v - struct of visual space information
-            % tp - temporal parameters
-            % trl_array - array of trial parameters struct
-            %
-            % returns: array of phosphenes based on those different trials
+        % function G = Gauss_2D(v,x0,y0,theta,sigma_x,sigma_y)
+        %     %Generates oriented 2D Gaussian on meshgrid v.X,v.Y
+        %     aa = cos(theta)^2/(2*sigma_x^2) + sin(theta)^2/(2*sigma_y^2);
+        %     bb = -sin(2*theta)/(4*sigma_x^2) + sin(2*theta)/(4*sigma_y^2);
+        %     cc = sin(theta)^2/(2*sigma_x^2) + cos(theta)^2/(2*sigma_y^2);
+        %     G = exp( - (aa*(v.X-x0).^2 + 2*bb*(v.X-x0).*(v.Y-y0) + cc*(v.Y-y0).^2));
+        % end
 
-            % Ensure all fields that will be added exist in trl since we
-            % are returning an array
-            required_fields = {'spikeWhen', 'spikeStrength', 'max_phosphene', ...
-                'sim_area', 'ellipse', 'sim_brightness'};
-
-            for f = 1:length(required_fields)
-                field = required_fields{f};
-                for i = 1:length(trl_array)
-                    if ~isfield(trl_array(i), field)
-                        trl_array(i).(field) = [];  % initialize with empty
-                    end
-                end
-            end
-
-            % for each trial struct create phosphene produced by
-            % stimulating electrode
-            for i = 1:length(trl_array)
-                if isnan(trl_array(i).freq)
-                    trl_array(i).max_phosphene = v.e(trl_array(i).e).rfmap; trl_array(i).spikeStrength = 1; % the scaling due to current integration
-                else
-                    trl_array(i) = p2p_c.convolve_model(tp, trl_array(i));
-                    trl_array(i).max_phosphene = v.e(trl_array(i).e).rfmap.*max(trl_array(i).spikeStrength);
-                end
-
-                % calculate the size of the image
-                trl_array(i).sim_area = (1/v.pixperdeg.^2) * sum(trl_array(i).max_phosphene(:) > v.drawthr)/2; % calculated area of phosphene based on mean of left and right eyes
-                if ~isempty(trl_array(i).max_phosphene)
-                    for ii=1:2 % left and right eye
-                        p = p2p_c.fit_ellipse_to_phosphene(trl_array(i).max_phosphene(:,:,ii)>v.drawthr,v);
-                        trl_array(i).ellipse(ii).x = p.x0;
-                        trl_array(i).ellipse(ii).y = p.y0;
-                        trl_array(i).ellipse(ii).sigma_x = p.sigma_x;
-                        trl_array(i).ellipse(ii).sigma_y = p.sigma_y;
-                        trl_array(i).ellipse(ii).theta = p.theta;
-                    end
-                    % what rule to use to translate phosphene image to brightness?
-                    beta = 6; % soft-max rule across pixels for both eyes
-                    trl_array(i).sim_brightness = ((1/v.pixperdeg.^2) * sum(trl_array(i).max_phosphene(:).^beta)^(1/beta));  % IF CHECK
-                else
-                    trl_array(i).sim_brightness = [];
-                end
-            end
-        end
-
+        %% Phosphene Simulation
         function [trl_array,v] = generate_phosphene(v, tp, trl)
             % finds the phosphene trl.max_phosphene corresponding to the brightest moment in
             % time and estimates trl.ellipse which represents the patient
@@ -750,81 +778,61 @@ classdef p2p_c
 
             end
         end
-
-        function [tp, nc] = define_temporalparameters(varargin)
-            % defines the parameters of the temporal model, defaults are
-            % based on Fine and Boynton, 2024
-            % https://www.nature.com/articles/s41598-024-65337-1#citeas
+        
+        function [trl_array,v] = generate_phosphene_multiple(v, tp, trl_array)
+            % written 7/24/24 by ES
+            % arguments :
+            % v - struct of visual space information
+            % tp - temporal parameters
+            % trl_array - array of trial parameters struct
             %
-            % commented 12/7/2024 IF
+            % returns: array of phosphenes based on those different trials
 
-            if nargin<1
-                tp = [];
-            else
-                tp = varargin{1};
+            % Ensure all fields that will be added exist in trl since we
+            % are returning an array
+            required_fields = {'spikeWhen', 'spikeStrength', 'max_phosphene', ...
+                'sim_area', 'ellipse', 'sim_brightness'};
+
+            for f = 1:length(required_fields)
+                field = required_fields{f};
+                for i = 1:length(trl_array)
+                    if ~isfield(trl_array(i), field)
+                        trl_array(i).(field) = [];  % initialize with empty
+                    end
+                end
             end
 
-            % parameters controlling the first stage of rapid integration
-            % of current by cell, describes the effect of changing pulse
-            % width
-            if ~isfield(tp, 'dt');       tp.dt = .001 * 10^-3; end % Represents time sampling in ms, should be no larger than 1/10 of tau1
-            if ~isfield(tp, 'tau1');   tp.tau1 = 0.0003; end    % First stage temporal integrator fixed based on Nowak and Bullier, 1998, 10.1007/s002210050304
-            if ~isfield(tp, 'refrac');   tp.refrac = 100; end  % Extent of attenuation for spiking refractory period
-            %if ~isfield(tp, 'refrac');   tp.refrac = 50; end
-            if ~isfield(tp, 'delta');   tp.delta = 0.001; end  % Decay parameter for refractory period
+            % for each trial struct create phosphene produced by
+            % stimulating electrode
+            for i = 1:length(trl_array)
+                if isnan(trl_array(i).freq)
+                    trl_array(i).max_phosphene = v.e(trl_array(i).e).rfmap; trl_array(i).spikeStrength = 1; % the scaling due to current integration
+                else
+                    trl_array(i) = p2p_c.convolve_model(tp, trl_array(i));
+                    trl_array(i).max_phosphene = v.e(trl_array(i).e).rfmap.*max(trl_array(i).spikeStrength);
+                end
 
-            % parameters controlling slower second stages of integration,
-            % describes the effect of changing the frequency, this model
-            % isn't great
-            if ~isfield(tp, 'tSamp');   tp.tSamp = 1000; end % Subsampling to speed things up
-            if ~isfield(tp, 'tau2');   tp.tau2 =  0.025; end  % Slower second stage of integration
-            %if ~isfield(tp, 'tau2');   tp.tau2 =  0.15; end
-            if ~isfield(tp, 'ncascades');  tp.ncascades = 3;   end % number of cascades in the slow filter of the temporal convolution
-            if ~isfield(tp, 'gammaflag');   tp.gammaflag = 1;   end            %  include second stage gamma
-
-
-            % leak out of charge accumulation
-            % https://iopscience.iop.org/article/10.1088/1741-2560/8/6/066007/pdf
-            % Frequency-dependent reduction of voltage-gated sodium current modulates retinal ganglion cell response rate to electrical stimulation
-            %  David Tsai et al 2011 J. Neural Eng. 8 066007,
-            %  Table 1 In = (1 − α) × e−kn + α,
-            tp.Na_recovery = 0.015; % how quickly adaptation recovers
-            tp.Na_strength = .2;    % how strongly the adaptation attenuates Sodium (Na) currents
-
-            % nonlinearity response parameters
-            if ~isfield(tp, 'spikemodel')
-                tp.spikemodel = 'convolve';
-            end
-
-            if strcmp(tp.spikemodel, 'convolve')
-                if ~isfield(tp, 'model');   tp.model = 'compression';   end
-                if ~isfield(tp, 'sc_in');   tp.sc_in = 0.5663;   end
-            elseif strcmp(tp.spikemodel, 'integratefire')
-                if ~isfield(tp, 'model');   tp.model = 'compression';   end
-                if ~isfield(tp, 'sc_in');   tp.sc_in = .5663;  end % 10000/3;   end
-            else
-                error('model variant not defined, should be "compression" or "linear"');
-            end
-
-            if strcmp(tp.model, 'compression')
-                if ~isfield(tp, 'power'); tp.power =  15.5901; end % chosen cos max brightness rating
-                if ~isfield(tp, 'sc_out'); tp.sc_out = 10; end % fit using Winawer brightness data
-            elseif strcmp(tp.model, 'sigmoid')
-                disp('using sigmoid semisaturation constant')
-                tp.asymptote = 2000;
-                tp.e50 = 500; % electrical semisaturation constant
-            elseif strcmp(tp.model, 'normcdf')
-                disp('using normcdf semisaturation constant')
-                tp.asymptote = 1500;
-                tp.mean = 750;
-                tp.sigma = 175;
-            elseif strcmp(tp.model, 'weibull')
-                disp('using weibull semisaturation constant')
-                tp.asymptote = 1000;
-                tp.thresh = 600;
-                tp.beta = 3.5;
+                % calculate the size of the image
+                trl_array(i).sim_area = (1/v.pixperdeg.^2) * sum(trl_array(i).max_phosphene(:) > v.drawthr)/2; % calculated area of phosphene based on mean of left and right eyes
+                if ~isempty(trl_array(i).max_phosphene)
+                    for ii=1:2 % left and right eye
+                        p = p2p_c.fit_ellipse_to_phosphene(trl_array(i).max_phosphene(:,:,ii)>v.drawthr,v);
+                        trl_array(i).ellipse(ii).x = p.x0;
+                        trl_array(i).ellipse(ii).y = p.y0;
+                        trl_array(i).ellipse(ii).sigma_x = p.sigma_x;
+                        trl_array(i).ellipse(ii).sigma_y = p.sigma_y;
+                        trl_array(i).ellipse(ii).theta = p.theta;
+                    end
+                    % what rule to use to translate phosphene image to brightness?
+                    beta = 6; % soft-max rule across pixels for both eyes
+                    trl_array(i).sim_brightness = ((1/v.pixperdeg.^2) * sum(trl_array(i).max_phosphene(:).^beta)^(1/beta));  % IF CHECK
+                else
+                    trl_array(i).sim_brightness = [];
+                end
             end
         end
+
+               
 
         %% psychophysics
         % function v = generate_visualtarget(v)
@@ -1867,7 +1875,7 @@ classdef p2p_c
         % Example:
         % x = linspace(-3,0,11);
         % plot(log(x), log(x.^2));
-        % logx2raw();
+        % logx2rawBeauchampFig4.m
         % logy2raw(); % should be tolerant to multiple calls
         %
         % Note:
@@ -1881,7 +1889,7 @@ classdef p2p_c
         %                the axis.
         % Edited by Kelly Chang - February 18, 2017
 
-        %% Input Control
+        % Input Control
 
         if ~exist('base', 'var')
             base = exp(1);
@@ -1891,7 +1899,7 @@ classdef p2p_c
             precision = 2;
         end
 
-        %% Calculate Log x-axis Labels
+        % Calculate Log x-axis Labels
 
         precision = sprintf('%%%2.1ff', precision*1.1);
         origXTick = get(gca, 'XTick'); % log x-axis labels (raw)
@@ -1927,7 +1935,7 @@ classdef p2p_c
         %                the axis.
         % Edited by Kelly Chang - February 18, 2017
 
-        %% Input Control
+        % Input Control
 
         if ~exist('base', 'var')
             base = exp(1);
@@ -1937,7 +1945,7 @@ classdef p2p_c
             precision = 2;
         end
 
-        %% Calculate Log x-axis Labels
+        % Calculate Log x-axis Labels
 
         precision = sprintf('%%%2.1ff', precision*1.1);
         origYTick = get(gca, 'YTick'); % log y-axis labels (raw)
