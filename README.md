@@ -65,7 +65,7 @@ The white panels show single typical phosphene replotted from from Winawer, J. &
 
 ## Figure 7
 **7A:** Array image and informal observations kindly supplied by P. Troyk and G. Dagnelie. For the rest of the images run Simulate_WFMA.m  
-**7B and 7C** Run Phosphene_Sz_vs_Ecc_Simulate. Note that to get the specifc phosphenes you will want to only simulate for one eccentricty/location.
+**7B and 7C** Run Phosphene_Sz_vs_Ecc_Simulate. Note that to get the specifc phosphenes in 7B you will want to only simulate for one eccentricty/location.
 
 <img src="https://github.com/ionefine/p2p-cortical/blob/main/wiki_pictures/41598_2024_65337_Fig7_HTML.jpg" width="400">
 
