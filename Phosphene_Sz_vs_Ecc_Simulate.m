@@ -19,7 +19,7 @@ close all
 %% Define eccentricties and radii to compare
 nSamp = 25; % we are going to re-estimate the size of the percept multiple times. Error bars pretty low with 25
 eccList = exp(linspace(log(.5), log(35), 15)); % the eccentricities of the electrodes
-radList =  exp(linspace(log(.05), log(5), 10)); % electrode size from teeny tiny to huge. These are radii, in cm units
+radList =  exp(linspace(log(.05), log(5), 10)); % electrode size from teeny tiny to huge. These are radii, in mm units
 
 
 %% generate cortical surface, visual map and pulse train
