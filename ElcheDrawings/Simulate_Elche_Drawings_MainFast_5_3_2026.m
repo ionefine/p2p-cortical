@@ -1,0 +1,121 @@
+% Simulate_Elche_Drawings_Main.m
+% Optimized Elche Drawings pipeline
+% - Loads patient drawings (and their cropped subimages)
+% - Defines cortical/visual model and simulates single-electrode phosphenes
+% - Selects top-K singletons per subimage by correlation (and SSIM)
+% - Combines singletons into sets (nimg <= vbl.n_DrawCombined), stores metrics only
+% - Generates matched random phosphenes and combinations
+% - Compares real vs random statistics and visualizes
+%
+% MATLAB: R2024b
+% Authors: IF, ES; Optimization pass: 2026
+
+clear; close all; clc;
+
+% ---------------------------
+% Setup and configuration
+% ---------------------------
+vbl = ed.setup(computer);            % ']Z' or 'auto'
+vbl.enable_prescreen = 1;       % coarse pre-screen to skip heavy registration
+vbl.prescreen_size = [64 64];   % downsample size for prescreen
+vbl.prescreen_thresh = 0.20;    % NCC threshold to run full alignment
+
+if isunix
+vbl.use_thread_pool = 0;        % use parpool('threads') for shared memory
+else
+vbl.use_thread_pool = 1;
+end
+vbl.use_reproducible_rng = 0;   % set rng seed for reproducibility (0: off)
+
+% Optional: seed RNG globally
+if vbl.use_reproducible_rng
+    rng(42, 'twister');
+end
+
+% ---------------------------
+% Load/crop patient drawings
+% ---------------------------
+% Run once if needed:
+% ed.crop_drawings(vbl);
+p_draw = ed.load_patient_drawings(vbl);
+
+% ---------------------------
+% Define cortical/visual model
+% ---------------------------
+if 0
+    
+    [c, v, trl, tp] = ed.define_cortical_model(vbl);
+
+% ---------------------------
+% Generate and save "best" singletons
+% ---------------------------
+DO_SIMULATE_AND_COMBINE = false;
+if DO_SIMULATE_AND_COMBINE
+    p_draw = ed.simulate_drawings(c, v, trl, tp, p_draw, vbl);
+    for d = 1:vbl.n_Drawings
+        for sd = 1:p_draw(d).n_SubImages
+            targetLen = numel(p_draw(d).patient_img{sd});
+            poolRows  = size(p_draw(d).subimg{sd}, 1);
+            nFinite   = sum(isfinite(p_draw(d).corr{sd}));
+            fprintf('DRAW %s d=%d sd=%d | targetLen=%d poolRows=%d | finiteCorr=%d/%d\n', ...
+                vbl.dirList(d).name, d, sd, targetLen, poolRows, nFinite, numel(p_draw(d).corr{sd}));
+        end
+    end
+
+    ed.save_simulated_drawings(p_draw, vbl);
+
+    % ed.visualize_singletons(vbl, 1);
+    ed.combine_sim_draws(vbl);
+
+    for d = 1:numel(vbl.dirList)
+        ed.plot_corr_histograms(vbl, d);
+        ed.visualize_combinations(vbl, d);
+    end
+end
+
+% ---------------------------
+% Create the random versions
+% ---------------------------
+% Remove heavy fields before passing copies to workers
+
+
+c = ed.safe_rmfield(c, {'e','x','y','X','Y','v','cropPix'});
+v = ed.safe_rmfield(v, {'e','x','y'});
+
+% Ensure parallel pool once
+pool = gcp('nocreate');
+if isempty(pool)
+    if vbl.use_thread_pool
+        parpool('threads', 4);
+    else
+        parpool('Processes'); % default process-based pool
+    end
+end
+
+% Run random reps in parallel
+parfor rep = 1:vbl.n_Reps
+    ed.simulate_save_rand_drawings(rep, c, v, trl, tp, vbl);
+end
+
+disp('Done generating random images');
+
+% ---------------------------
+% Combine random models
+% ---------------------------
+ed.combine_random_models(vbl);
+
+% ---------------------------
+% Analysis: real vs random
+% ---------------------------
+end
+for d = 1:numel(vbl.dirList)
+    ed.show_best_combos(vbl, d);
+     ed.plot_corr_histograms(vbl, d);
+    ed.compare_real_vs_rand_stats(vbl, d);
+
+end
+
+% Example for last drawing explicitly:
+lastIdx = numel(vbl.dirList);
+ed.plot_corr_histograms(vbl, lastIdx);
+ed.compare_real_vs_rand_stats(vbl, lastIdx);
