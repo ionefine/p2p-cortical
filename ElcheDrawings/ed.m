@@ -457,7 +457,7 @@ classdef ed
 
                 outFile = fullfile(randDir, sprintf('%s%s_%d%s.mat', drawName, vbl.fileidstr, rep, tag));
                 if exist(outFile, 'file')
-                    return; % already saved for this drawing+rep
+                    continue; % already saved for this drawing+rep
                 end
 
                 simFile = fullfile(modelsDir, sprintf('%s%s%s.mat', drawName, vbl.fileidstr, tag));
@@ -721,7 +721,7 @@ classdef ed
                     rand_combo.perms{rep}       = perms_rep;
                 end
 
-                outFile = fullfile(combosDir, sprintf('%s%s%s_rand.mat', drawName, vbl.fileidstr, tag));
+                outFile = fullfile(combosDir, sprintf('%s%s_rand%s.mat', drawName, vbl.fileidstr, tag));
                 save(outFile, 'rand_combo', '-v7.3');
             end
         end

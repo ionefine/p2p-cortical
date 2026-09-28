@@ -21,9 +21,9 @@ vbl.prescreen_size = [64 64];   % downsample size for prescreen
 vbl.prescreen_thresh = 0.20;    % NCC threshold to run full alignment
 
 if isunix
-vbl.use_thread_pool = 0;        % use parpool('threads') for shared memory
+vbl.use_thread_pool = 1;        % use parpool('threads') for shared memory
 else
-vbl.use_thread_pool = 1;
+vbl.use_thread_pool = 0;
 end
 vbl.use_reproducible_rng = 0;   % set rng seed for reproducibility (0: off)
 
@@ -42,14 +42,12 @@ p_draw = ed.load_patient_drawings(vbl);
 % ---------------------------
 % Define cortical/visual model
 % ---------------------------
-if 0
-    
-    [c, v, trl, tp] = ed.define_cortical_model(vbl);
+[c, v, trl, tp] = ed.define_cortical_model(vbl);
 
 % ---------------------------
 % Generate and save "best" singletons
 % ---------------------------
-DO_SIMULATE_AND_COMBINE = false;
+DO_SIMULATE_AND_COMBINE = true;
 if DO_SIMULATE_AND_COMBINE
     p_draw = ed.simulate_drawings(c, v, trl, tp, p_draw, vbl);
     for d = 1:vbl.n_Drawings
@@ -80,7 +78,7 @@ end
 
 
 c = ed.safe_rmfield(c, {'e','x','y','X','Y','v','cropPix'});
-v = ed.safe_rmfield(v, {'e','x','y'});
+v = ed.safe_rmfield(v, {'e','x','y','X','Y'});
 
 % Ensure parallel pool once
 pool = gcp('nocreate');
@@ -107,7 +105,6 @@ ed.combine_random_models(vbl);
 % ---------------------------
 % Analysis: real vs random
 % ---------------------------
-end
 for d = 1:numel(vbl.dirList)
     ed.show_best_combos(vbl, d);
      ed.plot_corr_histograms(vbl, d);
