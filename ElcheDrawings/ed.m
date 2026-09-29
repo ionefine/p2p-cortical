@@ -271,6 +271,8 @@ classdef ed
             % -----------------------
             candOut = cell(nElect, 1);
             parfor eIdx = 1:nElect
+                tElec = tic; % local to this iteration only -- no cross-worker state
+
                 c = ed.safe_rmfield(c_orig, {'e'});
                 v = ed.safe_rmfield(v_orig, {'e'});
                 c.e = c_orig.e(eIdx);
@@ -321,6 +323,7 @@ classdef ed
                 end
 
                 candOut{eIdx} = struct('cand', cand, 'radius', c.e.radius, 'x', v.e.x, 'y', v.e.y);
+                fprintf('Electrode %d / %d computed (%.1fs)\n', eIdx, nElect, toc(tElec));
             end
 
             % -----------------------

@@ -59,6 +59,7 @@ import copy
 import itertools
 import os
 import pickle
+import time
 from pathlib import Path
 from typing import List
 
@@ -518,11 +519,18 @@ def simulate_drawings(c_orig, v_orig, trl, tp, p_draw, vbl, max_workers=None):
     ) as executor:
         futures = [executor.submit(_compute_electrode_candidates, e_idx) for e_idx in range(n_elect)]
         n_done = 0
+        t_start = time.monotonic()
         for f in cf.as_completed(futures):
             e_idx, candidates, radius, elec_x, elec_y = f.result()
             results_by_electrode[e_idx] = (candidates, radius, elec_x, elec_y)
             n_done += 1
-            print(f"Electrode {e_idx + 1} / {n_elect} computed ({n_done}/{n_elect} done)")
+            elapsed = time.monotonic() - t_start
+            rate = elapsed / n_done  # seconds/electrode, averaged over max_workers parallel workers
+            eta = rate * (n_elect - n_done)
+            print(
+                f"Electrode {e_idx + 1} / {n_elect} computed ({n_done}/{n_elect} done, "
+                f"{elapsed:.0f}s elapsed, ~{eta:.0f}s remaining)"
+            )
 
     # Phase 2: sequential merge in original electrode order -- preserves
     # exact selection semantics of the old fully-serial version.
