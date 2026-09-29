@@ -66,7 +66,6 @@ if DO_SIMULATE_AND_COMBINE
     ed.combine_sim_draws(vbl);
 
     for d = 1:numel(vbl.dirList)
-        ed.plot_corr_histograms(vbl, d);
         ed.visualize_combinations(vbl, d);
     end
 end

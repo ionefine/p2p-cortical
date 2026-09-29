@@ -788,8 +788,8 @@ classdef ed
                 figure(ni+1); clf; set(gcf,'Name', sprintf('Best %d', ni));
                 idx = find(combo.nimg == ni);
                 K = min(numel(idx), 6);
-                for i = 1:K 
-                    mask  = logical(combo.cmbx(idx(i+4), :));
+                for i = 1:K
+                    mask  = logical(combo.cmbx(idx(i), :));
                     X     = single(tmp_model.subimg(:, mask)) / 255;
                     B     = X \ target;
                     recon = reshape(X * B, size(targetImg));
