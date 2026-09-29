@@ -441,6 +441,25 @@ def _compute_electrode_candidates(e_idx: int):
     v, c = p2p_c.generate_corticalelectricalresponse(c, v)
     img = generate_phosphene(v, tp, trl, vbl)
 
+    if img.size == 0 or min(img.shape) < 2:
+        # A fully degenerate electrode (no pixels passed the ef threshold in
+        # generate_corticalelectricalresponse -> uniform/no-response
+        # phosphene -> crop_img(img, 20) collapses to empty, see
+        # generate_phosphene's docstring). Registration (complex_gradient_image)
+        # requires at least a 2x2 image -- MATLAB's complexGradientImage_if.m
+        # says so explicitly ("input is assumed to be ... minimum dimensions
+        # 2x2 ... not checked here") and would crash identically on this
+        # input. There's no meaningful candidate to register/score from an
+        # electrode with no visible response, so skip it (matching the
+        # existing "WARNING! No pixels passed ef threshold" diagnostic in
+        # generate_corticalelectricalresponse) rather than let one bad-luck
+        # electrode crash an entire multi-hour run.
+        print(
+            f"WARNING: electrode {e_idx} produced a degenerate phosphene "
+            f"(shape={img.shape}, no usable visible response) -- skipping this electrode."
+        )
+        return e_idx, None, c.e[0].radius, v.e[0].x, v.e[0].y
+
     candidates = {}
     for d, sd, target, target_size, ref2d in targets:
         s, r = find_scale_rotation_ngc(img.astype(np.float32), target.astype(np.float32))
@@ -536,6 +555,8 @@ def simulate_drawings(c_orig, v_orig, trl, tp, p_draw, vbl, max_workers=None):
     # exact selection semantics of the old fully-serial version.
     for e_idx in range(n_elect):
         candidates, radius, elec_x, elec_y = results_by_electrode[e_idx]
+        if candidates is None:
+            continue  # degenerate electrode (see _compute_electrode_candidates), nothing to merge
 
         for d in range(vbl.n_Drawings):
             pd = p_draw[d]

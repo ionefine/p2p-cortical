@@ -282,47 +282,66 @@ classdef ed
                 v = p2p_c.generate_corticalelectricalresponse(c, v);
                 img = uint8(ed.generate_phosphene(v, tp, trl, vbl));
 
-                cand = struct('peakcorr', cell(1, nTargets), 'scaled_vec', cell(1, nTargets), ...
-                    'newCorr', cell(1, nTargets), 'newSSIM', cell(1, nTargets), 'targetSize', cell(1, nTargets));
+                if isempty(img) || min(size(img)) < 2
+                    % A fully degenerate electrode (no pixels passed the ef
+                    % threshold in generate_corticalelectricalresponse ->
+                    % uniform/no-response phosphene -> crop_img(img, 20)
+                    % collapses to empty; see generate_phosphene).
+                    % Registration (complexGradientImage_if.m) requires at
+                    % least a 2x2 image ("input is assumed to be ...
+                    % minimum dimensions 2x2 ... not checked here") and
+                    % would error on this input. There's no meaningful
+                    % candidate to register/score from an electrode with no
+                    % visible response, so skip it (matching the existing
+                    % "WARNING! No pixels passed ef threshold" diagnostic in
+                    % generate_corticalelectricalresponse) rather than let
+                    % one bad-luck electrode crash an entire multi-hour run.
+                    fprintf('WARNING: electrode %d produced a degenerate phosphene -- skipping this electrode.\n', eIdx);
+                    candOut{eIdx} = struct('cand', [], 'radius', c.e.radius, 'x', v.e.x, 'y', v.e.y);
+                else
+                    cand = struct('peakcorr', cell(1, nTargets), 'scaled_vec', cell(1, nTargets), ...
+                        'newCorr', cell(1, nTargets), 'newSSIM', cell(1, nTargets), 'targetSize', cell(1, nTargets));
 
-                for tt = 1:nTargets
-                    target = targets(tt).img;
-                    targetSize = targets(tt).targetSize;
+                    for tt = 1:nTargets
+                        target = targets(tt).img;
+                        targetSize = targets(tt).targetSize;
 
-                    [s, r] = findScaleRotationNGC_if(single(img), single(target));
-                    [tform, peakcorr] = resolveSimilarityRotationAmbiguityNGC_if(single(img), single(target), s, r);
-                    img_aligned = imwarp(img, tform, 'OutputView', targets(tt).ref2d, 'FillValues', 0);
+                        [s, r] = findScaleRotationNGC_if(single(img), single(target));
+                        [tform, peakcorr] = resolveSimilarityRotationAmbiguityNGC_if(single(img), single(target), s, r);
+                        img_aligned = imwarp(img, tform, 'OutputView', targets(tt).ref2d, 'FillValues', 0);
 
-                    if ~isequal(size(img_aligned), targetSize)
-                        error('simulate_drawings:sizeMismatch', ...
-                            'Warp output size != target size (eIdx=%d, t=%d).', eIdx, tt);
+                        if ~isequal(size(img_aligned), targetSize)
+                            error('simulate_drawings:sizeMismatch', ...
+                                'Warp output size != target size (eIdx=%d, t=%d).', eIdx, tt);
+                        end
+
+                        pixCount = numel(target);
+                        scaled_vec = ed.norm255(double(img_aligned(:)), vbl.rectify); % uint8 (rectify=1) or int8
+                        scaled_vec = double(scaled_vec(:)); % store as double for compatibility with existing code
+
+                        if numel(scaled_vec) ~= pixCount
+                            error('simulate_drawings:vectorLengthMismatch', ...
+                                'Vector length mismatch after warp: expected %d, got %d (t=%d, e=%d).', ...
+                                pixCount, numel(scaled_vec), tt, eIdx);
+                        end
+
+                        newCorr = ed.fastcorr(single(target(:)), single(img_aligned(:)));
+                        newSSIM = ssim( ...
+                            reshape(single(img_aligned), targetSize), ...
+                            single(target), ...
+                            'Exponents', [0 0 1], ...
+                            'DynamicRange', 255);
+
+                        cand(tt).peakcorr = peakcorr;
+                        cand(tt).scaled_vec = scaled_vec;
+                        cand(tt).newCorr = double(newCorr);
+                        cand(tt).newSSIM = double(newSSIM);
+                        cand(tt).targetSize = targetSize;
                     end
 
-                    pixCount = numel(target);
-                    scaled_vec = ed.norm255(double(img_aligned(:)), vbl.rectify); % uint8 (rectify=1) or int8
-                    scaled_vec = double(scaled_vec(:)); % store as double for compatibility with existing code
-
-                    if numel(scaled_vec) ~= pixCount
-                        error('simulate_drawings:vectorLengthMismatch', ...
-                            'Vector length mismatch after warp: expected %d, got %d (t=%d, e=%d).', ...
-                            pixCount, numel(scaled_vec), tt, eIdx);
-                    end
-
-                    newCorr = ed.fastcorr(single(target(:)), single(img_aligned(:)));
-                    newSSIM = ssim( ...
-                        reshape(single(img_aligned), targetSize), ...
-                        single(target), ...
-                        'Exponents', [0 0 1], ...
-                        'DynamicRange', 255);
-
-                    cand(tt).peakcorr = peakcorr;
-                    cand(tt).scaled_vec = scaled_vec;
-                    cand(tt).newCorr = double(newCorr);
-                    cand(tt).newSSIM = double(newSSIM);
-                    cand(tt).targetSize = targetSize;
+                    candOut{eIdx} = struct('cand', cand, 'radius', c.e.radius, 'x', v.e.x, 'y', v.e.y);
                 end
 
-                candOut{eIdx} = struct('cand', cand, 'radius', c.e.radius, 'x', v.e.x, 'y', v.e.y);
                 fprintf('Electrode %d / %d computed (%.1fs)\n', eIdx, nElect, toc(tElec));
             end
 
@@ -336,6 +355,10 @@ classdef ed
                 ex = candOut{eIdx}.x;
                 ey = candOut{eIdx}.y;
                 cand = candOut{eIdx}.cand;
+
+                if isempty(cand)
+                    continue; % degenerate electrode (see phase 1), nothing to merge
+                end
 
                 for tt = 1:nTargets
                     d = targets(tt).d;
