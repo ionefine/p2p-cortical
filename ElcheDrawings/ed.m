@@ -77,11 +77,7 @@ classdef ed
                     ed.clean_dir_safe(fullfile(drawDir, 'combos'));
                     ed.clean_dir_safe(fullfile(drawDir, 'models'));
                     ed.clean_dir_safe(fullfile(drawDir, 'random_models'));
-                    % Remove *.mat in root folder of drawing
-                    files = dir(fullfile(drawDir, '*.mat'));
-                    for k = 1:numel(files)
-                        try, delete(fullfile(drawDir, files(k).name)); catch, end
-                    end
+                    ed.clean_dir_safe(drawDir); % remove all files at drawing root (subfolders untouched)
                 else
                     ed.ensure_dirs(drawDir);
                 end
