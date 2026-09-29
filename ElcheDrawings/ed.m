@@ -625,6 +625,26 @@ classdef ed
         % Combine real and random
         % ---------------------------
         function combine_sim_draws(vbl)
+            %COMBINE_SIM_DRAWS
+            % Greedy forward selection (NOT an exhaustive search over all
+            % 2^nCols subsets): build the winning 1-electrode combo, then
+            % the winning 2-electrode combo by adding whichever single
+            % additional electrode most improves the fit given the fixed
+            % winning 1-electrode combo, then the winning 3-electrode combo
+            % the same way, and so on up to vbl.n_DrawCombined.
+            %
+            % Each combo.mask(c,:) is a superset of combo.mask(c-1,:) by
+            % construction; combo.added_col(c) records exactly which
+            % column was newly added at step c. This is what lets
+            % combine_random_models build a MATCHED null test ("does this
+            % specific newly-added electrode beat its own random
+            % counterpart"), rather than re-searching over every possible
+            % combo of size c on the random side too -- see that function's
+            % header comment for why the old exhaustive-search design
+            % (max corr over all C(nCols,c) combos, on both the real and
+            % random sides) answered a different, less appropriate
+            % question than "does adding electrode c improve the fit more
+            % than chance."
             warning('off','MATLAB:rankDeficientMatrix');
 
             for d = 1:vbl.n_Drawings
@@ -649,36 +669,41 @@ classdef ed
                     end
                 end
 
-                % Enumerate all combinations up to vbl.n_DrawCombined
-                nCols  = size(tmp_model.subimg, 2);
-                combos = dec2bin(1:(2^nCols - 1)) == '1';
-                combos = combos(sum(combos, 2) <= vbl.n_DrawCombined, :);
-
-                nC     = size(combos, 1);
-                nimg    = NaN(nC, 1, 'single');
-                corr_v  = NaN(nC, 1, 'single');
-                ssim_v  = NaN(nC, 1, 'single');
-                cmbx    = false(nC, nCols);
+                nCols = size(tmp_model.subimg, 2);
                 targetImg = single(sim_draw.patient_img{1});
                 target    = targetImg(:);
 
-                for ci = 1:nC
-                    mask  = combos(ci, :);
-                    X     = single(tmp_model.subimg(:, mask)) / 255;
-                    B     = X \ target;
-                    recon = X * B;
-                    nimg(ci)   = sum(mask);
-                    corr_v(ci) = ed.fastcorr(recon, target);
-                    ssim_v(ci) = ssim(reshape(recon, size(targetImg)), targetImg, ...
-                        'Exponents', [0 0 1], 'DynamicRange', 255);
-                    cmbx(ci, :) = mask;
-                end
+                maxC = vbl.n_DrawCombined;
+                combo.nimg      = (1:maxC)';
+                combo.corr_val  = NaN(maxC, 1, 'single');
+                combo.ssim_val  = NaN(maxC, 1, 'single');
+                combo.mask      = false(maxC, nCols);
+                combo.added_col = NaN(maxC, 1);
 
-                [~, id] = sort(corr_v, 'descend');
-                combo.nimg     = double(nimg(id));
-                combo.corr_val = double(corr_v(id));
-                combo.ssim_val = double(ssim_v(id));
-                combo.cmbx     = cmbx(id, :);
+                currentMask = false(1, nCols);
+                for c = 1:maxC
+                    remaining = find(~currentMask);
+                    bestCorr = -Inf; bestCol = NaN; bestSSIM = NaN;
+                    for j = remaining
+                        trialMask = currentMask;
+                        trialMask(j) = true;
+                        X     = single(tmp_model.subimg(:, trialMask)) / 255;
+                        B     = X \ target;
+                        recon = X * B;
+                        thisCorr = ed.fastcorr(recon, target);
+                        if thisCorr > bestCorr
+                            bestCorr = thisCorr;
+                            bestCol  = j;
+                            bestSSIM = ssim(reshape(recon, size(targetImg)), targetImg, ...
+                                'Exponents', [0 0 1], 'DynamicRange', 255);
+                        end
+                    end
+                    currentMask(bestCol)  = true;
+                    combo.mask(c, :)      = currentMask;
+                    combo.added_col(c)    = bestCol;
+                    combo.corr_val(c)     = double(bestCorr);
+                    combo.ssim_val(c)     = double(bestSSIM);
+                end
                 % Note: combo.subimg omitted to reduce disk footprint
 
                 outFile = fullfile(combosDir, sprintf('%s%s%s.mat', vbl.dirList(d).name, vbl.fileidstr, tag));
@@ -687,6 +712,27 @@ classdef ed
         end
 
         function combine_random_models(vbl)
+            %COMBINE_RANDOM_MODELS
+            % Null model for "does adding electrode c improve the fit more
+            % than chance." For each c, the REAL background (all electrodes
+            % up through step c-1, plus which single electrode was added at
+            % step c) is taken as FIXED from combo.mask(c,:)/combo.added_col(c)
+            % (see combine_sim_draws) -- this function does NOT re-search
+            % over other possible combos of size c on the random side. It
+            % only swaps the one newly-added electrode's contribution for
+            % its own random counterpart (same subimage slot, a fresh
+            % random cortical-map realization each rep) and re-fits.
+            %
+            % This replaces an earlier design that re-searched over every
+            % combo of size c with one column randomized and took the max,
+            % which effectively asked "does exhaustive search over real
+            % electrodes beat exhaustive search over random substitutes"
+            % rather than "does the specific electrode that won on the real
+            % side beat its own random counterpart" -- a different (and
+            % for this question, inappropriate) null hypothesis. NOTE:
+            % this changes rand_combo's field layout (no more .cmbx/.id/
+            % .nimg-per-combo columns), so combo/rand_combo .mat files from
+            % before this change must be regenerated, not reused.
             warning('off','MATLAB:rankDeficientMatrix');
 
             for d = 1:vbl.n_Drawings
@@ -714,14 +760,11 @@ classdef ed
                     end
                 end
 
-                nComb = size(combo.cmbx, 1);
+                maxC = numel(combo.corr_val);
                 R = vbl.n_Reps;
-                rand_combo.nimg     = NaN(R, nComb, 'single');
-                rand_combo.corr_val = NaN(R, nComb, 'single');
-                rand_combo.ssim_val = NaN(R, nComb, 'single');
-                rand_combo.id       = cell(R, 1);
+                rand_combo.corr_val = NaN(R, maxC, 'single');
+                rand_combo.ssim_val = NaN(R, maxC, 'single');
                 rand_combo.perms    = cell(R, 1);
-                rand_combo.cmbx     = combo.cmbx;
 
                 targetImg = single(sim_draw.patient_img{1});
                 target    = targetImg(:);
@@ -752,35 +795,24 @@ classdef ed
                         end
                     end
 
-                    local_corr = NaN(1, nComb, 'single');
-                    local_ssim = NaN(1, nComb, 'single');
-                    local_nimg = NaN(1, nComb, 'single');
+                    for c = 1:maxC
+                        mask = logical(combo.mask(c, :));
+                        addedCol = combo.added_col(c);
 
-                    for ci = 1:nComb
-                        mask = logical(combo.cmbx(ci, :));
-                        if ~any(mask), continue; end
-                        X  = single(tmp_model.subimg(:, mask)) / 255;
-                        Xr = single(randimg_local(:, mask)) / 255;
-
-                        % Overwrite first column with random
-                        X(:,1) = Xr(:,1);
+                        X = single(tmp_model.subimg(:, mask)) / 255;
+                        colsInMask = find(mask);
+                        addedPos = find(colsInMask == addedCol);
+                        X(:, addedPos) = single(randimg_local(:, addedCol)) / 255;
 
                         B = X \ target;
                         recon = X * B;
 
-                        local_nimg(ci) = sum(mask);
-                        local_corr(ci) = ed.fastcorr(recon, target);
-                        local_ssim(ci) = ssim(reshape(recon, size(targetImg)), targetImg, ...
+                        rand_combo.corr_val(rep, c) = ed.fastcorr(recon, target);
+                        rand_combo.ssim_val(rep, c) = ssim(reshape(recon, size(targetImg)), targetImg, ...
                             'Exponents', [0 0 1], 'DynamicRange', 255);
                     end
 
-                    [~, order] = sort(local_corr, 'descend');
-
-                    rand_combo.nimg(rep, :)     = local_nimg(order);
-                    rand_combo.corr_val(rep, :) = local_corr(order);
-                    rand_combo.ssim_val(rep, :) = local_ssim(order);
-                    rand_combo.id{rep}          = order;
-                    rand_combo.perms{rep}       = perms_rep;
+                    rand_combo.perms{rep} = perms_rep;
                 end
 
                 outFile = fullfile(combosDir, sprintf('%s%s_rand%s.mat', drawName, vbl.fileidstr, tag));
@@ -850,19 +882,18 @@ classdef ed
             targetImg = single(sim_draw.patient_img{1});
             target    = targetImg(:);
 
-            for ni = 1:3
-                figure(ni+1); clf; set(gcf,'Name', sprintf('Best %d', ni));
-                idx = find(combo.nimg == ni);
-                K = min(numel(idx), 6);
-                for i = 1:K
-                    mask  = logical(combo.cmbx(idx(i), :));
-                    X     = single(tmp_model.subimg(:, mask)) / 255;
-                    B     = X \ target;
-                    recon = reshape(X * B, size(targetImg));
-                    subplot(2,3,(i));
-                    imagesc(recon); axis image off; colormap gray;
-                    title(sprintf('corr=%.3f | idx=%s', combo.corr_val(idx(i)), mat2str(find(mask))));
-                end
+            % Greedy design (see combine_sim_draws) keeps exactly one
+            % winning combo per size c, not several candidates -- show it.
+            maxC = numel(combo.corr_val);
+            figure(2); clf; set(gcf,'Name', 'Winning combos (greedy)');
+            for c = 1:maxC
+                mask  = logical(combo.mask(c, :));
+                X     = single(tmp_model.subimg(:, mask)) / 255;
+                B     = X \ target;
+                recon = reshape(X * B, size(targetImg));
+                subplot(1, maxC, c);
+                imagesc(recon); axis image off; colormap gray;
+                title(sprintf('c=%d, corr=%.3f | idx=%s', c, combo.corr_val(c), mat2str(find(mask))));
             end
         end
 
@@ -890,46 +921,33 @@ classdef ed
                 end
             end
 
+            % Greedy design (see combine_sim_draws / combine_random_models):
+            % exactly one real winning combo per c, and its matched random
+            % null distribution (one value per rep, same fixed background,
+            % only the newly-added electrode swapped for random) -- no more
+            % re-searching over multiple combos of the same size on either
+            % side. For this illustrative figure only, the rep with the
+            % highest random-swap correlation is shown (statistical
+            % comparison itself is done in compare_real_vs_rand_stats,
+            % against the full per-rep distribution, not just this best rep).
+            maxC = numel(combo.corr_val);
             figure('Name', sprintf('Drawing %d: %s', d, draw_name), 'Color','w');
 
-            for nimg = 1:3
-                recon_real = nan(size(targetImg)); real_corr_val = NaN; real_corr_recomputed = NaN;
+            for c = 1:maxC
+                mask = logical(combo.mask(c, :));
+                addedCol = combo.added_col(c);
 
-                mask_real = (combo.nimg == nimg);
-                if any(mask_real)
-                    [~, best_idx_rel] = max(combo.corr_val(mask_real));
-                    real_idxs = find(mask_real);
-                    real_idx = real_idxs(best_idx_rel);
-                    mask = logical(combo.cmbx(real_idx, :));
-                    X = single(tmp_model.subimg(:, mask)) / 255;
-                    B = X \ single(target_vec);
-                    recon_real = reshape(X * B, size(targetImg));
-                    real_corr_val = combo.corr_val(real_idx);
-                    real_corr_recomputed = ed.fastcorr(single(recon_real(:)), single(target_vec));
-                end
+                X = single(tmp_model.subimg(:, mask)) / 255;
+                B = X \ single(target_vec);
+                recon_real = reshape(X * B, size(targetImg));
+                real_corr_val = combo.corr_val(c);
+                real_corr_recomputed = ed.fastcorr(single(recon_real(:)), single(target_vec));
 
-                % Best random across reps
-                best_corr = -Inf; best_rep = NaN; best_pos = NaN;
-                for rep = 1:vbl.n_Reps
-                    this_nimg = rand_combo.nimg(rep, :);
-                    this_corr = rand_combo.corr_val(rep, :);
-                    mask = (this_nimg == nimg);
-                    if any(mask)
-                        [cmax, relpos] = max(this_corr(mask));
-                        if cmax > best_corr
-                            best_corr = cmax; best_rep = rep;
-                            idxs = find(mask);
-                            best_pos = idxs(relpos);
-                        end
-                    end
-                end
+                % Rep with the best random-swap correlation for this c
+                [rand_corr_val, best_rep] = max(rand_combo.corr_val(:, c));
 
-                recon_rand = nan(size(targetImg)); rand_corr_val = NaN; rand_corr_recomputed = NaN;
-                if ~isnan(best_rep)
-                    rand_corr_val = rand_combo.corr_val(best_rep, best_pos);
-                    rand_c = rand_combo.id{best_rep}(best_pos);
-                    mask = logical(combo.cmbx(rand_c, :));
-
+                recon_rand = nan(size(targetImg)); rand_corr_recomputed = NaN;
+                if ~isnan(rand_corr_val)
                     tagR = ed.iff(vbl.debugflag, sprintf('_%d_debug', best_rep), sprintf('_%d', best_rep));
                     rand_draw_file = fullfile(vbl.datadir, draw_name, 'random_models', [draw_name, vbl.fileidstr, tagR, '.mat']);
                     D = load(rand_draw_file, 'rand_draw');
@@ -945,27 +963,26 @@ classdef ed
                         end
                     end
 
-                    X  = single(tmp_model.subimg(:, mask)) / 255;
-                    Xr = single(randimg_local(:, mask)) / 255;
-                    if any(mask)
-                        X(:,1) = Xr(:,1);
-                    end
-                    Br = X \ single(target_vec);
-                    recon_rand = reshape(X * Br, size(targetImg));
+                    colsInMask = find(mask);
+                    addedPos = find(colsInMask == addedCol);
+                    X2 = single(tmp_model.subimg(:, mask)) / 255;
+                    X2(:, addedPos) = single(randimg_local(:, addedCol)) / 255;
+                    Br = X2 \ single(target_vec);
+                    recon_rand = reshape(X2 * Br, size(targetImg));
                     rand_corr_recomputed = ed.fastcorr(single(recon_rand(:)), single(target_vec));
                 end
 
                 % Plot
-                subplot(3,3,(nimg-1)*3 + 1);
+                subplot(maxC, 3, (c-1)*3 + 1);
                 imagesc(targetImg); axis image off; colormap gray;
-                if nimg == 1, title('Target'); end
-                ylabel(sprintf('nimg = %d', nimg));
+                if c == 1, title('Target'); end
+                ylabel(sprintf('nimg = %d', c));
 
-                subplot(3,3,(nimg-1)*3 + 2);
+                subplot(maxC, 3, (c-1)*3 + 2);
                 imagesc(recon_real); axis image off; colormap gray;
                 title(sprintf('Real (saved=%.3f, rec=%.3f)', real_corr_val, real_corr_recomputed));
 
-                subplot(3,3,(nimg-1)*3 + 3);
+                subplot(maxC, 3, (c-1)*3 + 3);
                 imagesc(recon_rand); axis image off; colormap gray;
                 title(sprintf('Rand (saved=%.3f, rec=%.3f)', rand_corr_val, rand_corr_recomputed));
             end
@@ -985,22 +1002,15 @@ classdef ed
             C = load(combo_file, 'combo'); combo = C.combo;
             R = load(rand_file,  'rand_combo'); rand_combo = R.rand_combo;
 
+            % Greedy design: one real value and one matched per-rep random
+            % distribution per c (see combine_sim_draws / combine_random_models).
+            maxC = numel(combo.corr_val);
             figure('Name', sprintf('Correlation Histograms: %s', draw_name), 'Color','w');
-            for nimg = 1:3
-                mask_real = (combo.nimg == nimg);
-                best_real_corr = ed.iff(any(mask_real), max(combo.corr_val(mask_real)), NaN);
+            for c = 1:maxC
+                best_real_corr = combo.corr_val(c);
+                best_rand_corrs = rand_combo.corr_val(:, c);
 
-                best_rand_corrs = NaN(1, vbl.n_Reps);
-                for rep = 1:vbl.n_Reps
-                    this_nimg = rand_combo.nimg(rep, :);
-                    this_corr = rand_combo.corr_val(rep, :);
-                    mask = (this_nimg == nimg);
-                    if any(mask)
-                        best_rand_corrs(rep) = max(this_corr(mask));
-                    end
-                end
-
-                subplot(1,3,nimg);
+                subplot(1, maxC, c);
                 histogram(best_rand_corrs, 'FaceColor', [0.3 0.3 0.8], 'EdgeColor','k','FaceAlpha',0.6);
                 hold on;
                 yl = ylim;
@@ -1009,8 +1019,8 @@ classdef ed
                 end
                 ylim(yl); hold off;
                 xlabel('Correlation'); ylabel('# Reps');
-                title(sprintf('nimg = %d\nReal=%.3f', nimg, best_real_corr));
-                legend({'Random bests','Best real'}, 'Location','best');
+                title(sprintf('nimg = %d\nReal=%.3f', c, best_real_corr));
+                legend({'Random (electrode swapped)','Real'}, 'Location','best');
             end
 
             outdir = fullfile(vbl.datadir, 'figures');
@@ -1028,20 +1038,16 @@ classdef ed
             C = load(combo_file, 'combo'); combo = C.combo;
             R = load(rand_file,  'rand_combo'); rand_combo = R.rand_combo;
 
-            for nimg = 1:3
-                mask_real = (combo.nimg == nimg);
-                best_real_corr = NaN;
-                if any(mask_real)
-                    best_real_corr = max(combo.corr_val(mask_real));
-                end
-
-                best_rand_per_rep = NaN(vbl.n_Reps, 1);
-                for rep = 1:vbl.n_Reps
-                    mask = (rand_combo.nimg(rep, :) == nimg);
-                    if any(mask)
-                        best_rand_per_rep(rep) = max(rand_combo.corr_val(rep, mask));
-                    end
-                end
+            % Greedy design: one real value and one matched per-rep random
+            % distribution per c (see combine_sim_draws / combine_random_models).
+            % Unlike the old exhaustive-search design, best_rand_per_rep can
+            % no longer be empty for any c in 1:maxC (every c has exactly
+            % one real value and R per-rep random values by construction),
+            % so no empty-array guard is needed before prctile here.
+            maxC = numel(combo.corr_val);
+            for nimg = 1:maxC
+                best_real_corr = combo.corr_val(nimg);
+                best_rand_per_rep = rand_combo.corr_val(:, nimg);
                 best_rand_per_rep = best_rand_per_rep(~isnan(best_rand_per_rep));
 
                 top5 = prctile(best_rand_per_rep, 95);

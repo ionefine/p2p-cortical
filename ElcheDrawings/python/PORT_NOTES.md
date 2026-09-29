@@ -18,6 +18,19 @@ best-guess reimplementation -- every MATLAB source file that was needed
 | `ed.py` | `ed.m` | Validated via full-pipeline integration smoke test |
 | `run_elche_drawings_main.py` | `Simulate_Elche_Drawings_MainFast_5_3_2026.m` | Validated via full-pipeline integration smoke test (both thread-pool and process-pool backends) |
 
+**KNOWN DIVERGENCE (MATLAB-only redesign, not yet ported to Python):**
+`ed.py`'s `combine_sim_draws` / `combine_random_models` / `show_best_combos` /
+`plot_corr_histograms` / `compare_real_vs_rand_stats` still implement the OLD
+exhaustive-combo-search design (search every combo of size c, on both the
+real and random sides, take the max). `ed.m`'s equivalents were rewritten to
+a greedy-forward-selection design with a matched (not re-searched) random
+null -- see "Step III null-model redesign" below for the full rationale.
+`ed.py` was deliberately **not** updated to match (scoped to MATLAB only per
+explicit request), so the two pipelines currently produce different
+`combo`/`rand_combo` file structures and different statistics for
+`n_DrawCombined`-sized comparisons. Port `ed.py` to match before relying on
+its output for this part of the analysis.
+
 Install dependencies with `pip install -r requirements.txt`.
 
 ## Running it
@@ -232,6 +245,69 @@ similarly, but that function's outer loop (over `rep`) is already
 parallelized at the Main-script level -- nesting a second process pool
 inside each rep-worker adds real complexity (oversubscription risk, nested
 pool management) that wasn't requested and isn't implemented here.
+
+## Step III null-model redesign (MATLAB only)
+
+The Step III manuscript text described a sampling simulation meant to show
+that adding an additional *optimized* basis function improves the fit to
+the patient drawing by more than adding a *random* one would. The original
+implementation of `combine_sim_draws`/`combine_random_models` (both
+languages, before this change) did not actually test that:
+
+- **Real side:** for each combo size c, it evaluated *every* combo of
+  exactly c electrodes (all C(24,c) subsets of the 24 saved basis images)
+  and reported the single best-correlating one.
+- **Random side:** for each combo size c, it did the same exhaustive
+  search over all C(24,c) combos, but with each combo's first-indexed
+  electrode swapped for a random counterpart, and reported the max over
+  *that* search too (per rep).
+
+For c=1 this reduces to "best of 24 random draws" -- which is exactly what
+the (also-since-revised) manuscript text described. But it means the null
+distribution is itself built from an exhaustive search over random
+substitutes, not from "the specific electrode that won on the real side,
+swapped for its own random counterpart." That answers a different
+question (does exhaustive search over real electrodes beat exhaustive
+search over random ones) than the one the paper is trying to make (does
+adding a specific, already-identified electrode help more than chance).
+
+`ed.m` was rewritten to a **greedy forward-selection** design that matches
+the paper's intent:
+
+- **Real side (`combine_sim_draws`):** find the single best electrode
+  (winning-1); fix it, and find whichever additional electrode most
+  improves the fit (winning-2 = winning-1 + that electrode); fix that pair,
+  and find the best additional electrode again (winning-3), and so on up
+  to `vbl.n_DrawCombined`. `combo.mask(c,:)` is the winning c-electrode
+  combo; `combo.added_col(c)` records exactly which electrode was newly
+  added at step c.
+- **Random side (`combine_random_models`):** for each c, the real
+  background (winning-(c-1), i.e. `combo.mask(c,:)` minus the added
+  electrode) is held **fixed** -- no re-searching over other combos or
+  other electrode identities. Only the one newly-added electrode's
+  contribution is swapped for its own random counterpart (same subimage
+  slot, a freshly random cortical map each rep) and the fit is
+  recomputed. This builds a proper matched-pairs null distribution, one
+  value per rep, answering "does this specific added electrode beat what
+  a random one in the same slot would give."
+
+This substantially simplifies `rand_combo`'s structure too: `corr_val`/
+`ssim_val` are now `R x maxC` (one value per rep per c) instead of
+`R x nComb` with separate `.id`/`.nimg` bookkeeping to find the matching
+combo size, and there's exactly one real value per c instead of a max over
+many same-size combos. `show_best_combos`, `plot_corr_histograms`, and
+`compare_real_vs_rand_stats` were all updated to match. As a side effect,
+this also removes the empty-random-array edge case `compare_real_vs_rand_stats`
+used to be able to hit (see "Bugs found and fixed" above) -- every c from 1
+to `n_DrawCombined` now always has exactly one real value and R per-rep
+random values, by construction, so it can never be empty.
+
+**File compatibility:** this changes `combo`/`rand_combo`'s on-disk field
+layout (no more `.cmbx`/`.id`/`.nimg`-as-a-per-row-value). `.mat` files
+produced by the old `combine_sim_draws`/`combine_random_models` are
+**not** compatible with the new downstream functions and must be
+regenerated (rerun `combine_sim_draws` and `combine_random_models`), not
+reused, after taking this change.
 
 ## Known lower-confidence area
 
