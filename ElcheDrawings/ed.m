@@ -626,30 +626,14 @@ classdef ed
         % ---------------------------
         function combine_sim_draws(vbl)
             %COMBINE_SIM_DRAWS
-            % Computes BOTH real-side combination strategies in one pass,
-            % saved as separate variables (combo_greedy, combo_independent)
-            % in the same .mat file, so downstream analysis can use either
-            % without re-running this (cheap) step:
-            %
-            %   combo_greedy: forward selection. winning-1 = single best
-            %   electrode; winning-2 = winning-1 + whichever additional
-            %   electrode most improves the fit; winning-3 = winning-2 +
-            %   best additional; etc. combo_greedy.added_col(c) records
-            %   which electrode was newly added at step c -- this is what
-            %   lets combine_random_models build a MATCHED null test for
-            %   this pathway ("does this specific added electrode beat its
-            %   own random counterpart") rather than re-searching.
-            %
-            %   combo_independent: for each c independently, the single
-            %   best combo of EXACTLY c electrodes, found by exhaustively
-            %   searching all nchoosek(nCols,c) combos (24 singles + 276
-            %   pairs + 2024 triples for nCols=24, maxC=3). NOT guaranteed
-            %   to be nested -- the winning pair need not contain the
-            %   winning single. Because there's no single well-defined
-            %   "added electrode" for this pathway, its matched null
-            %   model (combine_random_models) instead re-searches all
-            %   nchoosek(nCols,c) combos too, with one column randomized --
-            %   see that function's header comment.
+            % For each c, the single best combo of EXACTLY c electrodes,
+            % found by exhaustively searching all nchoosek(nCols,c) combos
+            % independently per size (24 singles + 276 pairs + 2024 triples
+            % for nCols=24, maxC=3). NOT guaranteed to be nested -- the
+            % winning pair need not contain the winning single, since often
+            % it's the combination of DIFFERENT electrodes that best
+            % matches the percept. See combine_random_models for the
+            % matched null model this pairs with.
             warning('off','MATLAB:rankDeficientMatrix');
 
             for d = 1:vbl.n_Drawings
@@ -679,45 +663,10 @@ classdef ed
                 target    = targetImg(:);
                 maxC = vbl.n_DrawCombined;
 
-                % ---------- Greedy forward selection ----------
-                combo_greedy.method    = 'greedy';
-                combo_greedy.nimg      = (1:maxC)';
-                combo_greedy.corr_val  = NaN(maxC, 1, 'single');
-                combo_greedy.ssim_val  = NaN(maxC, 1, 'single');
-                combo_greedy.mask      = false(maxC, nCols);
-                combo_greedy.added_col = NaN(maxC, 1);
-
-                currentMask = false(1, nCols);
-                for c = 1:maxC
-                    remaining = find(~currentMask);
-                    bestCorr = -Inf; bestCol = NaN; bestSSIM = NaN;
-                    for j = remaining
-                        trialMask = currentMask;
-                        trialMask(j) = true;
-                        X     = single(tmp_model.subimg(:, trialMask)) / 255;
-                        B     = X \ target;
-                        recon = X * B;
-                        thisCorr = ed.fastcorr(recon, target);
-                        if thisCorr > bestCorr
-                            bestCorr = thisCorr;
-                            bestCol  = j;
-                            bestSSIM = ssim(reshape(recon, size(targetImg)), targetImg, ...
-                                'Exponents', [0 0 1], 'DynamicRange', 255);
-                        end
-                    end
-                    currentMask(bestCol)      = true;
-                    combo_greedy.mask(c, :)   = currentMask;
-                    combo_greedy.added_col(c) = bestCol;
-                    combo_greedy.corr_val(c)  = double(bestCorr);
-                    combo_greedy.ssim_val(c)  = double(bestSSIM);
-                end
-
-                % ---------- Independent exhaustive search per size ----------
-                combo_independent.method   = 'independent';
-                combo_independent.nimg     = (1:maxC)';
-                combo_independent.corr_val = NaN(maxC, 1, 'single');
-                combo_independent.ssim_val = NaN(maxC, 1, 'single');
-                combo_independent.mask     = false(maxC, nCols);
+                combo.nimg     = (1:maxC)';
+                combo.corr_val = NaN(maxC, 1, 'single');
+                combo.ssim_val = NaN(maxC, 1, 'single');
+                combo.mask     = false(maxC, nCols);
 
                 for c = 1:maxC
                     idxCombos = nchoosek(1:nCols, c);   % [nchoosek(nCols,c) x c], each row ascending
@@ -737,58 +686,44 @@ classdef ed
                                 'Exponents', [0 0 1], 'DynamicRange', 255);
                         end
                     end
-                    combo_independent.mask(c, :)  = bestMask;
-                    combo_independent.corr_val(c) = double(bestCorr);
-                    combo_independent.ssim_val(c) = double(bestSSIM);
+                    combo.mask(c, :)  = bestMask;
+                    combo.corr_val(c) = double(bestCorr);
+                    combo.ssim_val(c) = double(bestSSIM);
                 end
-                % Note: combo_*.subimg omitted to reduce disk footprint
+                % Note: combo.subimg omitted to reduce disk footprint
 
                 outFile = fullfile(combosDir, sprintf('%s%s%s.mat', vbl.dirList(d).name, vbl.fileidstr, tag));
-                save(outFile, 'combo_greedy', 'combo_independent', '-v7.3');
+                save(outFile, 'combo', '-v7.3');
             end
         end
 
         function combine_random_models(vbl)
             %COMBINE_RANDOM_MODELS
-            % Computes matched null distributions for BOTH real-side
-            % strategies (see combine_sim_draws), saved as
-            % rand_combo_greedy / rand_combo_independent in the same file:
+            % Null model matched to combine_sim_draws's non-nested "best of
+            % every combo of size c" real-side definition, for which a
+            % single well-defined "added electrode" doesn't exist (the
+            % winning c-electrode combo need not contain the winning
+            % (c-1)-electrode combo). For each c, ONE random electrode is
+            % drawn per rep (not searched or maximized), and combined with
+            % every possible (c-1)-sized REAL background (all
+            % nchoosek(nCols,c-1) of them, skipping any that already
+            % contain the drawn random electrode's identity); the max
+            % correlation across those backgrounds is taken. This is
+            % symmetric with how the real side (Step III) is itself free to
+            % search over every possible background -- the null model gets
+            % that same freedom -- while the random component is never
+            % searched/maximized, which would otherwise weaken (inflate)
+            % the null distribution.
             %
-            %   rand_combo_greedy: for each c, the real background
-            %   (combo_greedy.mask(c,:) minus the added electrode) is held
-            %   FIXED, and only the newly-added electrode
-            %   (combo_greedy.added_col(c)) is swapped for its random
-            %   counterpart. No re-searching on the random side -- this
-            %   answers "does the specific electrode that won on the real
-            %   side beat its own random counterpart."
+            % rand_combo.win_mask{rep,c} records the winning (c-1)-real
+            % background (all-false for c=1, which has no background) and
+            % rand_combo.win_rand_slot(rep,c) records which random
+            % electrode was drawn -- both needed to reconstruct the image
+            % in show_best_combos.
             %
-            %   rand_combo_independent: matches combo_independent's
-            %   non-nested "best of every combo of size c" real-side
-            %   definition, for which a single well-defined "added
-            %   electrode" doesn't exist (the winning c-electrode combo need
-            %   not contain the winning (c-1)-electrode combo). For each c,
-            %   ONE random electrode is drawn per rep (not searched or
-            %   maximized), and combined with every possible (c-1)-sized
-            %   REAL background (all nchoosek(nCols,c-1) of them, skipping
-            %   any that already contain the drawn random electrode's
-            %   identity); the max correlation across those backgrounds is
-            %   taken. This is symmetric with how the real side (Step III)
-            %   is itself free to search over every possible background --
-            %   the null model gets that same freedom -- while the random
-            %   component is never searched/maximized, avoiding the
-            %   "weakening the null via search over many random draws"
-            %   problem of an earlier design. rand_combo_independent.win_mask{rep,c}
-            %   records the winning (c-1)-real background (all-false for
-            %   c=1, which has no background) and
-            %   rand_combo_independent.win_rand_slot(rep,c) records which
-            %   random electrode was drawn -- both needed to reconstruct
-            %   the image in show_best_combos.
-            %
-            % Cost note: rand_combo_greedy is cheap (maxC fits per rep).
-            % rand_combo_independent costs nchoosek(nCols,c-1) fits per
-            % (rep,c) -- e.g. 1 + 24 + 276 = 301 fits/rep for nCols=24,
-            % maxC=3 (i.e. ~30k fits per drawing at R=100), cheaper than an
-            % earlier design that searched nchoosek(nCols,c) combos instead.
+            % Cost: nchoosek(nCols,c-1) fits per (rep,c) -- e.g.
+            % 1 + 24 + 276 = 301 fits/rep for nCols=24, maxC=3 (~30k fits
+            % per drawing at R=100).
             warning('off','MATLAB:rankDeficientMatrix');
 
             for d = 1:vbl.n_Drawings
@@ -803,10 +738,8 @@ classdef ed
                 comboFile = fullfile(combosDir, sprintf('%s%s%s.mat', drawName, vbl.fileidstr, tag));
                 simFile   = fullfile(modelsDir,  sprintf('%s%s%s.mat', drawName, vbl.fileidstr, tag));
 
-                C = load(comboFile, 'combo_greedy', 'combo_independent');
-                combo_greedy = C.combo_greedy;
-                combo_independent = C.combo_independent;
-                S = load(simFile, 'sim_draw'); sim_draw = S.sim_draw;
+                C = load(comboFile, 'combo'); combo = C.combo;
+                S = load(simFile,   'sim_draw'); sim_draw = S.sim_draw;
 
                 % Flatten real subimages as columns
                 tmp_model = [];
@@ -819,18 +752,14 @@ classdef ed
                 end
 
                 nCols = size(tmp_model.subimg, 2);
-                maxC  = numel(combo_greedy.corr_val);
+                maxC  = numel(combo.corr_val);
                 R = vbl.n_Reps;
 
-                rand_combo_greedy.corr_val = NaN(R, maxC, 'single');
-                rand_combo_greedy.ssim_val = NaN(R, maxC, 'single');
-                rand_combo_greedy.perms    = cell(R, 1);
-
-                rand_combo_independent.corr_val    = NaN(R, maxC, 'single');
-                rand_combo_independent.ssim_val    = NaN(R, maxC, 'single');
-                rand_combo_independent.win_mask    = cell(R, maxC);
-                rand_combo_independent.win_rand_slot = NaN(R, maxC);
-                rand_combo_independent.perms       = cell(R, 1);
+                rand_combo.corr_val    = NaN(R, maxC, 'single');
+                rand_combo.ssim_val    = NaN(R, maxC, 'single');
+                rand_combo.win_mask    = cell(R, maxC);
+                rand_combo.win_rand_slot = NaN(R, maxC);
+                rand_combo.perms       = cell(R, 1);
 
                 targetImg = single(sim_draw.patient_img{1});
                 target    = targetImg(:);
@@ -873,27 +802,8 @@ classdef ed
                         end
                     end
 
-                    % ---- Greedy: matched swap ----
-                    for c = 1:maxC
-                        mask = logical(combo_greedy.mask(c, :));
-                        addedCol = combo_greedy.added_col(c);
-
-                        X = single(tmp_model.subimg(:, mask)) / 255;
-                        colsInMask = find(mask);
-                        addedPos = find(colsInMask == addedCol);
-                        X(:, addedPos) = single(randimg_local(:, addedCol)) / 255;
-
-                        B = X \ target;
-                        recon = X * B;
-
-                        rand_combo_greedy.corr_val(rep, c) = ed.fastcorr(recon, target);
-                        rand_combo_greedy.ssim_val(rep, c) = ssim(reshape(recon, size(targetImg)), targetImg, ...
-                            'Exponents', [0 0 1], 'DynamicRange', 255);
-                    end
-                    rand_combo_greedy.perms{rep} = perms_rep;
-
-                    % ---- Independent: search over (c-1)-real backgrounds,
-                    % one (unsearched) random electrode per (rep,c) ----
+                    % Search over (c-1)-real backgrounds, one (unsearched)
+                    % random electrode per (rep,c)
                     for c = 1:maxC
                         rSlot = randi(nCols); % single random electrode for this (rep,c); NOT searched/maximized
                         randCol = single(randimg_local(:, rSlot)) / 255;
@@ -923,16 +833,16 @@ classdef ed
                                     'Exponents', [0 0 1], 'DynamicRange', 255);
                             end
                         end
-                        rand_combo_independent.corr_val(rep, c) = bestCorr;
-                        rand_combo_independent.ssim_val(rep, c) = bestSSIM;
-                        rand_combo_independent.win_mask{rep, c} = bestMask;
-                        rand_combo_independent.win_rand_slot(rep, c) = rSlot;
+                        rand_combo.corr_val(rep, c) = bestCorr;
+                        rand_combo.ssim_val(rep, c) = bestSSIM;
+                        rand_combo.win_mask{rep, c} = bestMask;
+                        rand_combo.win_rand_slot(rep, c) = rSlot;
                     end
-                    rand_combo_independent.perms{rep} = perms_rep;
+                    rand_combo.perms{rep} = perms_rep;
                 end
 
                 outFile = fullfile(combosDir, sprintf('%s%s_rand%s.mat', drawName, vbl.fileidstr, tag));
-                save(outFile, 'rand_combo_greedy', 'rand_combo_independent', '-v7.3');
+                save(outFile, 'rand_combo', '-v7.3');
             end
         end
 
@@ -966,9 +876,7 @@ classdef ed
             end
         end
 
-        function visualize_combinations(vbl, d, method)
-            % method: 'greedy' (default) or 'independent' -- see combine_sim_draws.
-            if nargin < 3, method = 'greedy'; end
+        function visualize_combinations(vbl, d)
             tag = ed.iff(vbl.debugflag, '_debug', '');
             simFile = fullfile(vbl.datadir, vbl.dirList(d).name, 'models', sprintf('%s%s%s.mat', vbl.dirList(d).name, vbl.fileidstr, tag));
             cmbFile = fullfile(vbl.datadir, vbl.dirList(d).name, 'combos', sprintf('%s%s%s.mat', vbl.dirList(d).name, vbl.fileidstr, tag));
@@ -979,8 +887,7 @@ classdef ed
             end
 
             S = load(simFile, 'sim_draw'); sim_draw = S.sim_draw;
-            C = load(cmbFile, sprintf('combo_%s', method));
-            combo = C.(sprintf('combo_%s', method));
+            C = load(cmbFile, 'combo'); combo = C.combo;
 
             figure(1); clf; set(gcf,'Name', vbl.dirList(d).name);
             for i = 1:numel(sim_draw.subimg)
@@ -1001,10 +908,10 @@ classdef ed
             targetImg = single(sim_draw.patient_img{1});
             target    = targetImg(:);
 
-            % Exactly one winning combo per size c under either pathway
-            % (greedy: nested; independent: not necessarily nested) -- show it.
+            % Exactly one (independently-searched, not necessarily nested)
+            % winning combo per size c -- show it.
             maxC = numel(combo.corr_val);
-            figure(2); clf; set(gcf,'Name', sprintf('Winning combos (%s)', method));
+            figure(2); clf; set(gcf,'Name', 'Winning combos');
             for c = 1:maxC
                 mask  = logical(combo.mask(c, :));
                 X     = single(tmp_model.subimg(:, mask)) / 255;
@@ -1016,9 +923,7 @@ classdef ed
             end
         end
 
-        function show_best_combos(vbl, d, method)
-            % method: 'greedy' (default) or 'independent' -- see combine_sim_draws.
-            if nargin < 3, method = 'greedy'; end
+        function show_best_combos(vbl, d)
             draw_name = vbl.dirList(d).name;
             tag = ed.iff(vbl.debugflag, '_debug', '');
 
@@ -1026,10 +931,8 @@ classdef ed
             rand_file  = fullfile(vbl.datadir, draw_name, 'combos', [draw_name, vbl.fileidstr, '_rand', tag, '.mat']);
             sim_file   = fullfile(vbl.datadir, draw_name, 'models', [draw_name, vbl.fileidstr, tag, '.mat']);
 
-            C = load(combo_file, sprintf('combo_%s', method));
-            combo = C.(sprintf('combo_%s', method));
-            R = load(rand_file, sprintf('rand_combo_%s', method));
-            rand_combo = R.(sprintf('rand_combo_%s', method));
+            C = load(combo_file, 'combo'); combo = C.combo;
+            R = load(rand_file, 'rand_combo'); rand_combo = R.rand_combo;
             S = load(sim_file, 'sim_draw'); sim_draw = S.sim_draw;
 
             targetImg = double(sim_draw.patient_img{1});
@@ -1045,12 +948,9 @@ classdef ed
             end
 
             % Exactly one real winning combo per c, and its matched random
-            % null distribution (one value per rep) -- no re-searching over
-            % which random electrode to use on either pathway (see
-            % combine_sim_draws / combine_random_models). Under 'greedy',
-            % the random side swaps the same fixed background's newly-added
-            % electrode; under 'independent', the random side searches over
-            % which (c-1)-real background best complements ONE (unsearched)
+            % null distribution (one value per rep) -- see combine_sim_draws
+            % / combine_random_models. The random side searches over which
+            % (c-1)-real background best complements ONE (unsearched)
             % random electrode, so its winning background
             % (rand_combo.win_mask) is generally a DIFFERENT set of
             % electrodes than combo.mask(c,:) (the real side's own,
@@ -1060,7 +960,7 @@ classdef ed
             % compare_real_vs_rand_stats, against the full per-rep
             % distribution, not just this best rep).
             maxC = numel(combo.corr_val);
-            figure('Name', sprintf('Drawing %d: %s (%s)', d, draw_name, method), 'Color','w');
+            figure('Name', sprintf('Drawing %d: %s', d, draw_name), 'Color','w');
 
             for c = 1:maxC
                 mask = logical(combo.mask(c, :));
@@ -1091,25 +991,13 @@ classdef ed
                         end
                     end
 
-                    switch method
-                        case 'greedy'
-                            addedCol = combo.added_col(c);
-                            colsInMask = find(mask);
-                            addedPos = find(colsInMask == addedCol);
-                            X2 = single(tmp_model.subimg(:, mask)) / 255;
-                            X2(:, addedPos) = single(randimg_local(:, addedCol)) / 255;
-                        case 'independent'
-                            % win_mask is the winning (c-1)-electrode REAL
-                            % background (all-false for c=1); win_rand_slot
-                            % is the one (unsearched) random electrode
-                            % appended to it -- see combine_random_models.
-                            winMask = rand_combo.win_mask{best_rep, c};
-                            winRandSlot = rand_combo.win_rand_slot(best_rep, c);
-                            X2 = [single(tmp_model.subimg(:, winMask)) / 255, ...
-                                  single(randimg_local(:, winRandSlot)) / 255];
-                        otherwise
-                            error('show_best_combos:unknownMethod', 'Unknown method: %s', method);
-                    end
+                    % win_mask is the winning (c-1)-electrode REAL background
+                    % (all-false for c=1); win_rand_slot is the one
+                    % (unsearched) random electrode appended to it.
+                    winMask = rand_combo.win_mask{best_rep, c};
+                    winRandSlot = rand_combo.win_rand_slot(best_rep, c);
+                    X2 = [single(tmp_model.subimg(:, winMask)) / 255, ...
+                          single(randimg_local(:, winRandSlot)) / 255];
 
                     Br = X2 \ single(target_vec);
                     recon_rand = reshape(X2 * Br, size(targetImg));
@@ -1133,27 +1021,23 @@ classdef ed
 
             outdir = fullfile(vbl.datadir, 'figures');
             if ~exist(outdir, 'dir'), mkdir(outdir); end
-            fig_name = sprintf('Drawing_%s_%s', draw_name, method);
+            fig_name = sprintf('Drawing_%s', draw_name);
             exportgraphics(gcf, fullfile(outdir, [fig_name, '.pdf']), 'ContentType', 'vector');
         end
 
-        function plot_corr_histograms(vbl, d, method)
-            % method: 'greedy' (default) or 'independent' -- see combine_sim_draws.
-            if nargin < 3, method = 'greedy'; end
+        function plot_corr_histograms(vbl, d)
             draw_name = vbl.dirList(d).name;
             tag = ed.iff(vbl.debugflag, '_debug', '');
             combo_file = fullfile(vbl.datadir, draw_name, 'combos', [draw_name, vbl.fileidstr, tag, '.mat']);
             rand_file  = fullfile(vbl.datadir, draw_name, 'combos', [draw_name, vbl.fileidstr, '_rand', tag, '.mat']);
 
-            C = load(combo_file, sprintf('combo_%s', method));
-            combo = C.(sprintf('combo_%s', method));
-            R = load(rand_file, sprintf('rand_combo_%s', method));
-            rand_combo = R.(sprintf('rand_combo_%s', method));
+            C = load(combo_file, 'combo'); combo = C.combo;
+            R = load(rand_file, 'rand_combo'); rand_combo = R.rand_combo;
 
             % One real value and one matched per-rep random distribution
-            % per c under either pathway (see combine_sim_draws / combine_random_models).
+            % per c (see combine_sim_draws / combine_random_models).
             maxC = numel(combo.corr_val);
-            figure('Name', sprintf('Correlation Histograms: %s (%s)', draw_name, method), 'Color','w');
+            figure('Name', sprintf('Correlation Histograms: %s', draw_name), 'Color','w');
             for c = 1:maxC
                 best_real_corr = combo.corr_val(c);
                 best_rand_corrs = rand_combo.corr_val(:, c);
@@ -1173,25 +1057,21 @@ classdef ed
 
             outdir = fullfile(vbl.datadir, 'figures');
             if ~exist(outdir, 'dir'), mkdir(outdir); end
-            fig_name = sprintf('Drawing_%s_%s_histogram', draw_name, method);
+            fig_name = sprintf('Drawing_%s_histogram', draw_name);
             exportgraphics(gcf, fullfile(outdir, [fig_name, '.pdf']), 'ContentType', 'vector');
         end
 
-        function compare_real_vs_rand_stats(vbl, d, method)
-            % method: 'greedy' (default) or 'independent' -- see combine_sim_draws.
-            if nargin < 3, method = 'greedy'; end
+        function compare_real_vs_rand_stats(vbl, d)
             draw_name = vbl.dirList(d).name;
             tag = ed.iff(vbl.debugflag, '_debug', '');
             combo_file = fullfile(vbl.datadir, draw_name, 'combos', [draw_name, vbl.fileidstr, tag, '.mat']);
             rand_file  = fullfile(vbl.datadir, draw_name, 'combos', [draw_name, vbl.fileidstr, '_rand', tag, '.mat']);
 
-            C = load(combo_file, sprintf('combo_%s', method));
-            combo = C.(sprintf('combo_%s', method));
-            R = load(rand_file, sprintf('rand_combo_%s', method));
-            rand_combo = R.(sprintf('rand_combo_%s', method));
+            C = load(combo_file, 'combo'); combo = C.combo;
+            R = load(rand_file, 'rand_combo'); rand_combo = R.rand_combo;
 
             % One real value and one matched per-rep random distribution
-            % per c under either pathway (see combine_sim_draws / combine_random_models).
+            % per c (see combine_sim_draws / combine_random_models).
             % best_rand_per_rep can never be empty for any c in 1:maxC
             % (every c has exactly one real value and R per-rep random
             % values by construction), so no empty-array guard is needed
@@ -1205,7 +1085,7 @@ classdef ed
                 top5 = prctile(best_rand_per_rep, 95);
                 top1 = prctile(best_rand_per_rep, 99);
 
-                fprintf('Image %s | method=%s | nimg=%d\n', draw_name, method, nimg);
+                fprintf('Image %s | nimg=%d\n', draw_name, nimg);
                 fprintf('Best REAL corr: %.4f\n', best_real_corr);
                 fprintf('Random top 5%% threshold: %.4f\n', top5);
                 fprintf('Random top 1%% threshold: %.4f\n', top1);

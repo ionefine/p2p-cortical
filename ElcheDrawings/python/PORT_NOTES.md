@@ -21,14 +21,14 @@ best-guess reimplementation -- every MATLAB source file that was needed
 **KNOWN DIVERGENCE (MATLAB-only redesign, not yet ported to Python):**
 `ed.py`'s `combine_sim_draws` / `combine_random_models` / `show_best_combos` /
 `plot_corr_histograms` / `compare_real_vs_rand_stats` still implement the OLD
-exhaustive-combo-search design (search every combo of size c, on both the
-real and random sides, take the max). `ed.m`'s equivalents were rewritten to
-a greedy-forward-selection design with a matched (not re-searched) random
-null -- see "Step III null-model redesign" below for the full rationale.
-`ed.py` was deliberately **not** updated to match (scoped to MATLAB only per
-explicit request), so the two pipelines currently produce different
-`combo`/`rand_combo` file structures and different statistics for
-`n_DrawCombined`-sized comparisons. Port `ed.py` to match before relying on
+design (search every combo of size c on the real side and take the max;
+null model re-searches all combos of size c with one column randomized).
+`ed.m`'s equivalents were redesigned twice in the course of getting the
+Step III null model right -- see "Step III null-model redesign" below for
+the full history and final design. `ed.py` was deliberately **not** updated
+to match (scoped to MATLAB only per explicit request), so the two pipelines
+currently produce different `combo`/`rand_combo` file structures and
+different statistics for `n_DrawCombined`-sized comparisons. Port `ed.py` to match before relying on
 its output for this part of the analysis.
 
 Install dependencies with `pip install -r requirements.txt`.
@@ -271,43 +271,64 @@ question (does exhaustive search over real electrodes beat exhaustive
 search over random ones) than the one the paper is trying to make (does
 adding a specific, already-identified electrode help more than chance).
 
-`ed.m` was rewritten to a **greedy forward-selection** design that matches
-the paper's intent:
+Getting the redesign right took two iterations:
 
-- **Real side (`combine_sim_draws`):** find the single best electrode
-  (winning-1); fix it, and find whichever additional electrode most
-  improves the fit (winning-2 = winning-1 + that electrode); fix that pair,
-  and find the best additional electrode again (winning-3), and so on up
-  to `vbl.n_DrawCombined`. `combo.mask(c,:)` is the winning c-electrode
-  combo; `combo.added_col(c)` records exactly which electrode was newly
-  added at step c.
-- **Random side (`combine_random_models`):** for each c, the real
-  background (winning-(c-1), i.e. `combo.mask(c,:)` minus the added
-  electrode) is held **fixed** -- no re-searching over other combos or
-  other electrode identities. Only the one newly-added electrode's
-  contribution is swapped for its own random counterpart (same subimage
-  slot, a freshly random cortical map each rep) and the fit is
-  recomputed. This builds a proper matched-pairs null distribution, one
-  value per rep, answering "does this specific added electrode beat what
-  a random one in the same slot would give."
+**Iteration 1 (superseded): greedy forward selection.** `combine_sim_draws`
+found the single best electrode (winning-1), then fixed it and searched for
+whichever additional electrode most improved the fit (winning-2 =
+winning-1 + that electrode), and so on up to `vbl.n_DrawCombined`.
+`combine_random_models` then held the real background fixed and swapped
+only the newly-added electrode for its own random counterpart -- a clean
+matched-pairs test. This was abandoned because "often it's the combination
+of *different* things that best matches the percept" (the paper's own
+finding) -- the winning pair need not contain the winning single, which
+greedy-by-construction rules out. Reverted in favor of:
 
-This substantially simplifies `rand_combo`'s structure too: `corr_val`/
-`ssim_val` are now `R x maxC` (one value per rep per c) instead of
-`R x nComb` with separate `.id`/`.nimg` bookkeeping to find the matching
-combo size, and there's exactly one real value per c instead of a max over
-many same-size combos. `show_best_combos`, `plot_corr_histograms`, and
-`compare_real_vs_rand_stats` were all updated to match. As a side effect,
-this also removes the empty-random-array edge case `compare_real_vs_rand_stats`
-used to be able to hit (see "Bugs found and fixed" above) -- every c from 1
-to `n_DrawCombined` now always has exactly one real value and R per-rep
-random values, by construction, so it can never be empty.
+**Iteration 2 (final): independent search per size, background-matched
+null.**
+
+- **Real side (`combine_sim_draws`):** for each c independently, the
+  single best combo of *exactly* c electrodes, found by exhaustively
+  searching all `nchoosek(nCols,c)` combos (24 singles + 276 pairs + 2024
+  triples for nCols=24, maxC=3). **Not** required to be nested -- the
+  winning pair need not contain the winning single, matching the finding
+  above. `combo.mask(c,:)` is the winning c-electrode combo.
+- **Random side (`combine_random_models`):** because there's no single
+  well-defined "added electrode" when combos aren't nested, the null model
+  draws **exactly one** random electrode per `(rep, c)` -- never searched
+  or maximized -- and pairs it with *every* possible `(c-1)`-sized real
+  background (all `nchoosek(nCols,c-1)` of them, skipping any that already
+  contain that electrode's identity), taking the max only over which
+  background to use. This is symmetric with the real side's own freedom to
+  search over every background, while the random component is never
+  searched -- avoiding the original design's "weakening the null via
+  search over many random draws" problem without reintroducing it at the
+  combo level (an intermediate design that searched all `nchoosek(nCols,c)`
+  combos with one column randomized was tried and rejected for exactly
+  that reason). For c=1 (no background) this reduces cleanly to a single
+  random phosphene per rep. `rand_combo.win_mask{rep,c}` records the
+  winning `(c-1)`-real background (all-false for c=1) and
+  `rand_combo.win_rand_slot(rep,c)` records which electrode was drawn.
+
+Cost: the real side is `nchoosek(nCols,c)` fits total (2324 for nCols=24,
+maxC=3, done once). The null side is `nchoosek(nCols,c-1)` fits per
+`(rep,c)` -- e.g. `1 + 24 + 276 = 301` fits/rep, ~30k fits per drawing at
+R=100 -- cheaper than the rejected intermediate design's `nchoosek(nCols,c)`
+per `(rep,c)` (~2324 fits/rep, ~232k per drawing).
+
+`show_best_combos`, `plot_corr_histograms`, and `compare_real_vs_rand_stats`
+were all updated to match this final design. As a side effect, this also
+removes the empty-random-array edge case `compare_real_vs_rand_stats` used
+to be able to hit (see "Bugs found and fixed" above) -- every c from 1 to
+`n_DrawCombined` now always has exactly one real value and R per-rep random
+values, by construction, so it can never be empty.
 
 **File compatibility:** this changes `combo`/`rand_combo`'s on-disk field
-layout (no more `.cmbx`/`.id`/`.nimg`-as-a-per-row-value). `.mat` files
-produced by the old `combine_sim_draws`/`combine_random_models` are
-**not** compatible with the new downstream functions and must be
-regenerated (rerun `combine_sim_draws` and `combine_random_models`), not
-reused, after taking this change.
+layout (no more `.cmbx`/`.id`/`.nimg`-as-a-per-row-value; `rand_combo` now
+carries `.win_mask`/`.win_rand_slot` instead). `.mat` files produced by any
+earlier version of `combine_sim_draws`/`combine_random_models` are **not**
+compatible with the current downstream functions and must be regenerated
+(rerun `combine_sim_draws` and `combine_random_models`), not reused.
 
 ## Known lower-confidence area
 
