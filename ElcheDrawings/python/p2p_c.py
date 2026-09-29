@@ -492,18 +492,45 @@ def generate_corticalmap(c: Struct, v: Struct):
 # ===========================================================================
 # Receptive fields / cortical electrical response
 # ===========================================================================
-def generate_corticalcell(ef, pix_flat_index: int, c: Struct, v: Struct):
+def _flat_maps_cache(c: Struct):
+    """Column-major-flattened views of the per-pixel maps generate_corticalcell
+    indexes into. These maps (c.v.X/Y, c.ODmap, c.ORmap, c.RFsizemap,
+    c.DISTmap, c.ONOFFmap) don't change across the pixel loop in
+    generate_corticalelectricalresponse, so flattening them once and reusing
+    the result (instead of re-flattening -- i.e. reallocating a full copy --
+    on every single pixel call) is a pure performance fix with no numerical
+    effect: same values, just computed once instead of thousands of times."""
+    return {
+        "vX": c.v.X.flatten(order="F"),
+        "vY": c.v.Y.flatten(order="F"),
+        "OD": c.ODmap.flatten(order="F"),
+        "OR": c.ORmap.flatten(order="F"),
+        "RFsize": c.RFsizemap.flatten(order="F"),
+        "DIST": c.DISTmap.flatten(order="F"),
+        "ONOFF": c.ONOFFmap.flatten(order="F"),
+    }
+
+
+def generate_corticalcell(ef, pix_flat_index: int, c: Struct, v: Struct, flat=None):
     """RF for a single cortical pixel (flattened MATLAB column-major index).
 
     Returns an array shaped (ny, nx, 2) for 'scoreboard'/'smirnakis', or
     (ny, nx, 2, 2) for 'ringach' (dims: eye, on/off).
+
+    `flat`, if given, is a cache from `_flat_maps_cache(c)` -- avoids
+    re-flattening c's per-pixel maps on every call (see that function's
+    docstring). Falls back to flattening internally when not provided, so
+    the standalone call signature is unchanged.
     """
-    x0 = c.v.X.flatten(order="F")[pix_flat_index]
-    y0 = c.v.Y.flatten(order="F")[pix_flat_index]
-    od = c.ODmap.flatten(order="F")[pix_flat_index]
-    theta = np.pi - c.ORmap.flatten(order="F")[pix_flat_index]
-    sigma_x = c.RFsizemap.flatten(order="F")[pix_flat_index] * c.ar
-    sigma_y = c.RFsizemap.flatten(order="F")[pix_flat_index]
+    if flat is None:
+        flat = _flat_maps_cache(c)
+
+    x0 = flat["vX"][pix_flat_index]
+    y0 = flat["vY"][pix_flat_index]
+    od = flat["OD"][pix_flat_index]
+    theta = np.pi - flat["OR"][pix_flat_index]
+    sigma_x = flat["RFsize"][pix_flat_index] * c.ar
+    sigma_y = flat["RFsize"][pix_flat_index]
 
     if c.rfmodel == "scoreboard":
         G = ef * np.exp(-((v.X - x0) ** 2 / 0.0001 + (v.Y - y0) ** 2 / 0.00001))
@@ -524,14 +551,14 @@ def generate_corticalcell(ef, pix_flat_index: int, c: Struct, v: Struct):
         tmp = np.exp(-(aa * (v.X - x0) ** 2 + 2 * bb * (v.X - x0) * (v.Y - y0) + cc * (v.Y - y0) ** 2))
         A = np.sqrt(np.sum(tmp > 0.2) / v.pixperdeg**2)
         pixNum_1based = pix_flat_index + 1  # DISTmap column-major index below
-        d = c.DISTmap.flatten(order="F")[pix_flat_index] * A
+        d = flat["DIST"][pix_flat_index] * A
 
         x_off = x0 + (d / 2) * np.cos(theta)
         y_off = y0 - (d / 2) * np.sin(theta)
         x_on = x0 - (d / 2) * np.cos(theta)
         y_on = y0 + (d / 2) * np.sin(theta)
 
-        wplus = c.ONOFFmap.flatten(order="F")[pix_flat_index]
+        wplus = flat["ONOFF"][pix_flat_index]
         wminus = 1 - wplus
 
         hplus_on = np.exp(-(aa * (v.X - x_on) ** 2 + 2 * bb * (v.X - x_on) * (v.Y - y_on) + cc * (v.Y - y_on) ** 2))
@@ -570,6 +597,7 @@ def generate_corticalelectricalresponse(c: Struct, v: Struct):
     c.setdefault("rfmodel", "ringach")
 
     cropFlat = c.cropPix.flatten(order="F")
+    flat = _flat_maps_cache(c)
 
     if len(v.e) != len(c.e):
         raise ValueError("c.e and v.e must be parallel arrays of the same length")
@@ -591,7 +619,7 @@ def generate_corticalelectricalresponse(c: Struct, v: Struct):
         ct = len(valid_pix)
 
         for p in valid_pix:
-            RF = generate_corticalcell(ef_flat[p], p, c, v)
+            RF = generate_corticalcell(ef_flat[p], p, c, v, flat=flat)
             if RF.ndim == 4:
                 RF = RF[:, :, :, 0]  # ignore inhibitory component, matches MATLAB squeeze(RF(:,:,:,1))
             rfmap[:, :, 0] += RF[:, :, 0]
