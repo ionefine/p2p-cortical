@@ -184,6 +184,55 @@ match.
   `c`/`v`/`trl`/`tp`/`vbl` (all built from `p2p_c.Struct`/NumPy arrays) are
   picklable for `multiprocessing`.
 
+## Performance: parallelizing `simulate_drawings`
+
+Profiling `p2p_c.generate_corticalelectricalresponse` at production
+resolution (`pixperdeg=10`, `pixpermm=10`) showed **~130s for a single
+electrode** (after also fixing the flatten-caching issue above) -- with up
+to 1000 electrodes, a fully serial `simulate_drawings` run would take on
+the order of tens of hours, in MATLAB as well as Python (this is inherent
+to the algorithm, not a Python-specific slowdown; each cortical pixel that
+passes threshold requires evaluating several full-visual-field-sized
+Gaussian receptive fields).
+
+Both `ed.py`'s `simulate_drawings` (via `ProcessPoolExecutor`, with a
+per-worker initializer so the large read-only `c`/`v` structs are pickled
+once per worker rather than once per electrode) and `ed.m`'s
+`simulate_drawings` (via `parfor`) are now parallelized across electrodes.
+The design is split into two phases specifically to guarantee **byte-identical
+output** to the old fully-serial version:
+
+1. **Phase 1 (parallel):** everything about a single electrode that doesn't
+   touch shared state -- phosphene generation plus registration against
+   every (drawing, subimage) target. Fully independent across electrodes.
+2. **Phase 2 (strictly sequential, original electrode order):** the
+   pool-selection logic (the "quick gate" against `min(pd.corr[sd])` and
+   the diversity check against already-saved candidates) reads and mutates
+   `p_draw`'s shared per-subimage pools, and is genuinely order-dependent
+   -- so it stays a plain loop over electrodes in `0..n_elect-1` order,
+   applied to the phase-1 results.
+
+Validated: `ed.py`'s debug-scale smoke test produces **exactly the same**
+`corr`/`subID` values before and after parallelizing (confirms byte-identical
+selection), and ran ~3x faster on 4 cores at that tiny scale (14.2s -> 4.8s;
+the speedup is expected to scale roughly with core count at production
+scale, where the per-electrode work dominates far more heavily over
+parallel-pool overhead).
+
+`ed.py`'s `simulate_drawings` takes an optional `max_workers` argument
+(default: `os.cpu_count()`); as with the random-rep parallelism, it must be
+called from code guarded by `if __name__ == "__main__":` when using the
+default process-pool backend (already true of `run_elche_drawings_main.py`).
+
+Not parallelized (out of scope for this pass, flagged as a possible
+follow-up): the inner per-candidate-electrode loop inside
+`simulate_save_rand_drawings` also calls
+`generate_corticalelectricalresponse` once per candidate and could benefit
+similarly, but that function's outer loop (over `rep`) is already
+parallelized at the Main-script level -- nesting a second process pool
+inside each rep-worker adds real complexity (oversubscription risk, nested
+pool management) that wasn't requested and isn't implemented here.
+
 ## Known lower-confidence area
 
 `vbl.trl.freq` is `NaN` throughout the Elche pipeline

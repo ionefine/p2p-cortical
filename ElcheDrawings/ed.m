@@ -228,18 +228,49 @@ classdef ed
             % Key invariant enforced:
             %   size(img_aligned) MUST equal size(target) for the current sd.
             %   If not, throw an error immediately (fail fast).
+            %
+            % Parallelized across electrodes: each electrode's phosphene
+            % generation (p2p_c.generate_corticalelectricalresponse, the
+            % dominant cost -- profiling showed ~130s/electrode at
+            % production resolution, i.e. tens of hours for a full
+            % 1000-electrode run when done serially) plus registration
+            % against every drawing/subimage is fully independent of every
+            % other electrode, so phase 1 below runs it in a parfor. Phase 2
+            % (choosing which pool slot each candidate replaces) reads and
+            % mutates p_draw(d).corr{sd}/subimg{sd}, which is genuinely
+            % order-dependent (the "quick gate" and diversity check compare
+            % against whatever's already been saved), so it stays a plain,
+            % strictly-sequential for loop over electrodes in original
+            % (1:nElect) order, applied to the phase-1 results -- this
+            % reproduces byte-identical output to the old fully-serial
+            % version, just with the expensive independent work moved onto
+            % multiple workers.
 
-            % -----------------------
-            % Config defaults
-            % -----------------------
             corrThresh = 0.90; % max allowed similarity among saved models (diversity constraint)
-
             nElect = numel(c_orig.e);
 
-            for eIdx = 1:nElect
-                fprintf('Electrode %d / %d\n', eIdx, nElect);
+            % Flatten (drawing, subimage) pairs once; every electrode is
+            % registered against the same list of targets.
+            targets = struct('img', {}, 'targetSize', {}, 'ref2d', {}, 'd', {}, 'sd', {});
+            t = 0;
+            for d = 1:vbl.n_Drawings
+                for sd = 1:p_draw(d).n_SubImages
+                    t = t + 1;
+                    targets(t).img = p_draw(d).patient_img{sd};
+                    targets(t).targetSize = size(targets(t).img);
+                    targets(t).ref2d = p_draw(d).ref2d;
+                    targets(t).d = d;
+                    targets(t).sd = sd;
+                end
+            end
+            nTargets = numel(targets);
 
-                % Restrict to one electrode
+            % -----------------------
+            % Phase 1: parallel, per-electrode candidate computation
+            % (no shared mutable state -- safe to run in any order)
+            % -----------------------
+            candOut = cell(nElect, 1);
+            parfor eIdx = 1:nElect
                 c = ed.safe_rmfield(c_orig, {'e'});
                 v = ed.safe_rmfield(v_orig, {'e'});
                 c.e = c_orig.e(eIdx);
@@ -247,118 +278,127 @@ classdef ed
 
                 c = p2p_c.generate_ef(c);
                 v = p2p_c.generate_corticalelectricalresponse(c, v);
-
-                % Generate phosphene image (2D uint8)
                 img = uint8(ed.generate_phosphene(v, tp, trl, vbl));
 
-                for d = 1:vbl.n_Drawings
-                    for sd = 1:p_draw(d).n_SubImages
+                cand = struct('peakcorr', cell(1, nTargets), 'scaled_vec', cell(1, nTargets), ...
+                    'newCorr', cell(1, nTargets), 'newSSIM', cell(1, nTargets), 'targetSize', cell(1, nTargets));
 
-                        target = p_draw(d).patient_img{sd};
-                        targetSize = size(target);
+                for tt = 1:nTargets
+                    target = targets(tt).img;
+                    targetSize = targets(tt).targetSize;
 
-                        % Full similarity registration (scale + rotation)
-                        [s, r] = findScaleRotationNGC_if(single(img), single(target));
-                        [tform, peakcorr] = resolveSimilarityRotationAmbiguityNGC_if(single(img), single(target), s, r);
+                    [s, r] = findScaleRotationNGC_if(single(img), single(target));
+                    [tform, peakcorr] = resolveSimilarityRotationAmbiguityNGC_if(single(img), single(target), s, r);
+                    img_aligned = imwarp(img, tform, 'OutputView', targets(tt).ref2d, 'FillValues', 0);
 
-                        % Warp into the CURRENT SUBIMAGE CANVAS
-                        img_aligned = imwarp(img, tform, 'OutputView', p_draw(d).ref2d, 'FillValues', 0);
+                    if ~isequal(size(img_aligned), targetSize)
+                        error('simulate_drawings:sizeMismatch', ...
+                            'Warp output size != target size (eIdx=%d, t=%d).', eIdx, tt);
+                    end
 
-                        % Optional strict check (should always pass if your invariant holds)
-                        if ~isequal(size(img_aligned), size(target))
-                            error('simulate_drawings:sizeMismatch', ...
-                                'Warp output size != target size for %s (d=%d sd=%d).', vbl.dirList(d).name, d, sd);
+                    pixCount = numel(target);
+                    scaled_vec = ed.norm255(double(img_aligned(:)), vbl.rectify); % uint8 (rectify=1) or int8
+                    scaled_vec = double(scaled_vec(:)); % store as double for compatibility with existing code
+
+                    if numel(scaled_vec) ~= pixCount
+                        error('simulate_drawings:vectorLengthMismatch', ...
+                            'Vector length mismatch after warp: expected %d, got %d (t=%d, e=%d).', ...
+                            pixCount, numel(scaled_vec), tt, eIdx);
+                    end
+
+                    newCorr = ed.fastcorr(single(target(:)), single(img_aligned(:)));
+                    newSSIM = ssim( ...
+                        reshape(single(img_aligned), targetSize), ...
+                        single(target), ...
+                        'Exponents', [0 0 1], ...
+                        'DynamicRange', 255);
+
+                    cand(tt).peakcorr = peakcorr;
+                    cand(tt).scaled_vec = scaled_vec;
+                    cand(tt).newCorr = double(newCorr);
+                    cand(tt).newSSIM = double(newSSIM);
+                    cand(tt).targetSize = targetSize;
+                end
+
+                candOut{eIdx} = struct('cand', cand, 'radius', c.e.radius, 'x', v.e.x, 'y', v.e.y);
+            end
+
+            % -----------------------
+            % Phase 2: sequential merge, in original electrode order
+            % (this is where order-dependent pool/diversity state lives)
+            % -----------------------
+            for eIdx = 1:nElect
+                fprintf('Electrode %d / %d\n', eIdx, nElect);
+                radius = candOut{eIdx}.radius;
+                ex = candOut{eIdx}.x;
+                ey = candOut{eIdx}.y;
+                cand = candOut{eIdx}.cand;
+
+                for tt = 1:nTargets
+                    d = targets(tt).d;
+                    sd = targets(tt).sd;
+                    targetSize = cand(tt).targetSize;
+                    peakcorr = cand(tt).peakcorr;
+
+                    % Quick gate: only consider if it can beat the worst saved corr
+                    % (Use peakcorr from the registration as a cheap gate.)
+                    if peakcorr <= min(p_draw(d).corr{sd})
+                        continue;
+                    end
+
+                    % Ensure pool matrix height matches target pixels (otherwise upstream is already corrupted)
+                    pixCount = prod(targetSize);
+                    if size(p_draw(d).subimg{sd}, 1) ~= pixCount
+                        error('simulate_drawings:poolSizeMismatch', ...
+                            ['Pool pixel dimension mismatch BEFORE write.\n' ...
+                            'Drawing (d=%d), sd=%d\n' ...
+                            'Expected pool rows=%d, got %d.\n' ...
+                            'This indicates earlier writes used the wrong OutputView.'], ...
+                            d, sd, pixCount, size(p_draw(d).subimg{sd}, 1));
+                    end
+
+                    scaled_vec = cand(tt).scaled_vec;
+                    newCorr = cand(tt).newCorr;
+                    newSSIM = cand(tt).newSSIM;
+
+                    % Diversity check vs existing saved candidates
+                    pool = p_draw(d).subimg{sd}; % [pixCount x K]
+                    K = size(pool, 2);
+
+                    if all(~isfinite(p_draw(d).corr{sd})) || all(isnan(pool(:)))
+                        maxPoolCorr = 0;
+                        mostSimilarIdx = 1;
+                    else
+                        pc = -inf(1, K, 'single');
+                        for k = 1:K
+                            if all(isfinite(pool(:,k)))
+                                pc(k) = ed.fastcorr(single(pool(:,k)), single(scaled_vec));
+                            end
                         end
-
-
-                        % HARD SIZE CHECK (fail fast)
-                        if ~isequal(size(img_aligned), targetSize)
-                            error('simulate_drawings:sizeMismatch', ...
-                                ['Warped size mismatch (rotation/scale can expand bbox if OutputView is wrong).\n' ...
-                                'Drawing: %s (d=%d), subimage sd=%d, electrode e=%d\n' ...
-                                'Expected target size: [%d %d]\n' ...
-                                'Got aligned size:     [%d %d]\n'], ...
-                                vbl.dirList(d).name, d, sd, eIdx, ...
-                                targetSize(1), targetSize(2), size(img_aligned,1), size(img_aligned,2));
-                        end
-
-                        % Quick gate: only consider if it can beat the worst saved corr
-                        % (Use peakcorr from the registration as a cheap gate.)
-                        if peakcorr <= min(p_draw(d).corr{sd})
-                            continue;
-                        end
-
-                        % Ensure pool matrix height matches target pixels (otherwise upstream is already corrupted)
-                        pixCount = numel(target);
-                        if size(p_draw(d).subimg{sd}, 1) ~= pixCount
-                            error('simulate_drawings:poolSizeMismatch', ...
-                                ['Pool pixel dimension mismatch BEFORE write.\n' ...
-                                'Drawing %s (d=%d), sd=%d\n' ...
-                                'Expected pool rows=%d (numel(target)), got %d.\n' ...
-                                'This indicates earlier writes used the wrong OutputView.'], ...
-                                vbl.dirList(d).name, d, sd, pixCount, size(p_draw(d).subimg{sd}, 1));
-                        end
-
-                        % Normalize aligned image for storage / diversity comparisons (vectorized)
-                        scaled_vec = ed.norm255(double(img_aligned(:)), vbl.rectify); % uint8 (rectify=1) or int8
-                        scaled_vec = double(scaled_vec(:)); % store as double for compatibility with existing code
-
-                        % HARD VECTOR LENGTH CHECK (should always pass if size check passed)
-                        if numel(scaled_vec) ~= pixCount
-                            error('simulate_drawings:vectorLengthMismatch', ...
-                                'Vector length mismatch after warp: expected %d, got %d (d=%d, sd=%d, e=%d).', ...
-                                pixCount, numel(scaled_vec), d, sd, eIdx);
-                        end
-
-                        % Correlation vs target (fast)
-                        newCorr = ed.fastcorr(single(target(:)), single(img_aligned(:)));
-
-                        % SSIM (structure-only)
-                        newSSIM = ssim( ...
-                            reshape(single(img_aligned), targetSize), ...
-                            single(target), ...
-                            'Exponents', [0 0 1], ...
-                            'DynamicRange', 255);
-
-                        % Diversity check vs existing saved candidates
-                        pool = p_draw(d).subimg{sd}; % [pixCount x K]
-                        K = size(pool, 2);
-
-                        if all(~isfinite(p_draw(d).corr{sd})) || all(isnan(pool(:)))
+                        [maxPoolCorr, mostSimilarIdx] = max(pc);
+                        if ~isfinite(maxPoolCorr)
                             maxPoolCorr = 0;
                             mostSimilarIdx = 1;
-                        else
-                            pc = -inf(1, K, 'single');
-                            for k = 1:K
-                                if all(isfinite(pool(:,k)))
-                                    pc(k) = ed.fastcorr(single(pool(:,k)), single(scaled_vec));
-                                end
-                            end
-                            [maxPoolCorr, mostSimilarIdx] = max(pc);
-                            if ~isfinite(maxPoolCorr)
-                                maxPoolCorr = 0;
-                                mostSimilarIdx = 1;
-                            end
                         end
+                    end
 
-                        % Choose which slot to replace
-                        if maxPoolCorr > corrThresh
-                            ridx = mostSimilarIdx;           % too similar -> replace most similar
-                        else
-                            [~, ridx] = min(p_draw(d).corr{sd}); % otherwise replace worst corr
-                        end
+                    % Choose which slot to replace
+                    if maxPoolCorr > corrThresh
+                        ridx = mostSimilarIdx;           % too similar -> replace most similar
+                    else
+                        [~, ridx] = min(p_draw(d).corr{sd}); % otherwise replace worst corr
+                    end
 
-                        % Save if better than what it's replacing
-                        if newCorr > p_draw(d).corr{sd}(ridx)
-                            p_draw(d).subimg{sd}(:, ridx) = scaled_vec;
-                            p_draw(d).radius{sd}(ridx)   = c.e.radius;
-                            p_draw(d).x{sd}(ridx)        = v.e.x;
-                            p_draw(d).y{sd}(ridx)        = v.e.y;
-                            p_draw(d).corr{sd}(ridx)     = double(newCorr);
-                            p_draw(d).ssim{sd}(ridx)     = double(newSSIM);
-                            p_draw(d).subID{sd}(ridx)    = sd;
-                            p_draw(d).size{sd}           = targetSize;
-                        end
+                    % Save if better than what it's replacing
+                    if newCorr > p_draw(d).corr{sd}(ridx)
+                        p_draw(d).subimg{sd}(:, ridx) = scaled_vec;
+                        p_draw(d).radius{sd}(ridx)   = radius;
+                        p_draw(d).x{sd}(ridx)        = ex;
+                        p_draw(d).y{sd}(ridx)        = ey;
+                        p_draw(d).corr{sd}(ridx)     = newCorr;
+                        p_draw(d).ssim{sd}(ridx)     = newSSIM;
+                        p_draw(d).subID{sd}(ridx)    = sd;
+                        p_draw(d).size{sd}           = targetSize;
                     end
                 end
             end

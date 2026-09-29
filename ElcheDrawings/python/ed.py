@@ -54,8 +54,10 @@ selection decision).
 
 from __future__ import annotations
 
+import concurrent.futures as cf
 import copy
 import itertools
+import os
 import pickle
 from pathlib import Path
 from typing import List
@@ -400,55 +402,150 @@ def define_cortical_model(vbl):
 # ===========================================================================
 # Simulation of singletons
 # ===========================================================================
-def simulate_drawings(c_orig, v_orig, trl, tp, p_draw, vbl):
+_worker_state: dict = {}
+
+
+def _init_electrode_worker(c_orig, v_orig, trl, tp, targets, vbl):
+    """ProcessPoolExecutor initializer: stashes the (large, read-only)
+    shared inputs in this worker process's globals ONCE, instead of
+    re-pickling/re-sending them on every task submission."""
+    _worker_state["c_orig"] = c_orig
+    _worker_state["v_orig"] = v_orig
+    _worker_state["trl"] = trl
+    _worker_state["tp"] = tp
+    _worker_state["targets"] = targets
+    _worker_state["vbl"] = vbl
+
+
+def _compute_electrode_candidates(e_idx: int):
+    """Phase-1 worker: everything about a single electrode that does NOT
+    depend on shared/mutable pool state -- phosphene generation (the
+    profiled bottleneck) plus registration against every (drawing,
+    subimage) target. Fully independent across electrodes, so safe to run
+    in parallel/in any order; the electrode-order-dependent pool-selection
+    logic lives in simulate_drawings's phase-2 merge loop instead."""
+    c_orig = _worker_state["c_orig"]
+    v_orig = _worker_state["v_orig"]
+    trl = _worker_state["trl"]
+    tp = _worker_state["tp"]
+    targets = _worker_state["targets"]
+    vbl = _worker_state["vbl"]
+
+    c = _struct_copy_without(c_orig, exclude=("e",))
+    v = _struct_copy_without(v_orig, exclude=("e",))
+    c.e = [copy.deepcopy(c_orig.e[e_idx])]
+    v.e = [copy.deepcopy(v_orig.e[e_idx])]
+
+    c = p2p_c.generate_ef(c)
+    v, c = p2p_c.generate_corticalelectricalresponse(c, v)
+    img = generate_phosphene(v, tp, trl, vbl)
+
+    candidates = {}
+    for d, sd, target, target_size, ref2d in targets:
+        s, r = find_scale_rotation_ngc(img.astype(np.float32), target.astype(np.float32))
+        A, peakcorr = resolve_similarity_rotation_ambiguity_ngc(
+            img.astype(np.float32), target.astype(np.float32), s, r
+        )
+        img_aligned = imwarp_similarity_fixed(img, A, ref2d, fill_value=0)
+
+        if img_aligned.shape != target_size:
+            raise ValueError(
+                "simulate_drawings:sizeMismatch "
+                f"Warp output size != target size (e_idx={e_idx}, d={d}, sd={sd})."
+            )
+
+        pix_count = target.size
+        scaled_vec = norm255(img_aligned.ravel(), vbl.rectify).astype(np.float64)
+        if scaled_vec.size != pix_count:
+            raise ValueError("simulate_drawings:vectorLengthMismatch Vector length mismatch after warp.")
+
+        new_corr = fastcorr(target.ravel(), img_aligned.ravel())
+        new_ssim = _ssim_structure(img_aligned.reshape(target_size), target, 255)
+
+        candidates[(d, sd)] = {
+            "peakcorr": peakcorr,
+            "scaled_vec": scaled_vec,
+            "new_corr": new_corr,
+            "new_ssim": new_ssim,
+            "target_size": target_size,
+        }
+
+    return e_idx, candidates, c.e[0].radius, v.e[0].x, v.e[0].y
+
+
+def simulate_drawings(c_orig, v_orig, trl, tp, p_draw, vbl, max_workers=None):
+    """Parallelized across electrodes (each electrode's phosphene
+    generation -- p2p_c.generate_corticalelectricalresponse, profiled at
+    ~130s/electrode at production resolution, i.e. tens of hours for a
+    1000-electrode run done serially -- and registration against every
+    drawing/subimage is fully independent of every other electrode).
+
+    This is split into two phases to guarantee byte-identical output to a
+    fully-serial version:
+      1. `_compute_electrode_candidates` runs in a ProcessPoolExecutor,
+         one task per electrode, computing everything that doesn't touch
+         shared mutable state.
+      2. A plain, strictly-sequential loop over electrodes in original
+         (0..n_elect-1) order applies the pool-selection logic (the "quick
+         gate" and diversity check, which compare against whatever's
+         already been saved, so are genuinely order-dependent) to the
+         phase-1 results.
+
+    Must be called from code guarded by `if __name__ == "__main__":` when
+    using the default process-pool backend (already true of
+    run_elche_drawings_main.py's main()).
+    """
     corr_thresh = 0.90
     n_elect = len(c_orig.e)
+    if n_elect == 0:
+        return p_draw
 
+    targets = []
+    for d in range(vbl.n_Drawings):
+        pd = p_draw[d]
+        for sd in range(pd.n_SubImages):
+            targets.append((d, sd, pd.patient_img[sd], pd.patient_img[sd].shape, pd.ref2d))
+
+    if max_workers is None:
+        max_workers = os.cpu_count() or 1
+    max_workers = max(1, min(max_workers, n_elect))
+
+    results_by_electrode = {}
+    with cf.ProcessPoolExecutor(
+        max_workers=max_workers,
+        initializer=_init_electrode_worker,
+        initargs=(c_orig, v_orig, trl, tp, targets, vbl),
+    ) as executor:
+        futures = [executor.submit(_compute_electrode_candidates, e_idx) for e_idx in range(n_elect)]
+        n_done = 0
+        for f in cf.as_completed(futures):
+            e_idx, candidates, radius, elec_x, elec_y = f.result()
+            results_by_electrode[e_idx] = (candidates, radius, elec_x, elec_y)
+            n_done += 1
+            print(f"Electrode {e_idx + 1} / {n_elect} computed ({n_done}/{n_elect} done)")
+
+    # Phase 2: sequential merge in original electrode order -- preserves
+    # exact selection semantics of the old fully-serial version.
     for e_idx in range(n_elect):
-        print(f"Electrode {e_idx + 1} / {n_elect}")
-
-        c = _struct_copy_without(c_orig, exclude=("e",))
-        v = _struct_copy_without(v_orig, exclude=("e",))
-        c.e = [copy.deepcopy(c_orig.e[e_idx])]
-        v.e = [copy.deepcopy(v_orig.e[e_idx])]
-
-        c = p2p_c.generate_ef(c)
-        v, c = p2p_c.generate_corticalelectricalresponse(c, v)
-
-        img = generate_phosphene(v, tp, trl, vbl)
+        candidates, radius, elec_x, elec_y = results_by_electrode[e_idx]
 
         for d in range(vbl.n_Drawings):
             pd = p_draw[d]
             for sd in range(pd.n_SubImages):
-                target = pd.patient_img[sd]
-                target_size = target.shape
-
-                s, r = find_scale_rotation_ngc(img.astype(np.float32), target.astype(np.float32))
-                A, peakcorr = resolve_similarity_rotation_ambiguity_ngc(
-                    img.astype(np.float32), target.astype(np.float32), s, r
-                )
-
-                img_aligned = imwarp_similarity_fixed(img, A, pd.ref2d, fill_value=0)
-
-                if img_aligned.shape != target_size:
-                    raise ValueError(
-                        "simulate_drawings:sizeMismatch "
-                        f"Warp output size != target size for {vbl.dirList[d].name} (d={d} sd={sd})."
-                    )
+                cand = candidates[(d, sd)]
+                target_size = cand["target_size"]
+                peakcorr = cand["peakcorr"]
 
                 if peakcorr <= np.min(pd.corr[sd]):
                     continue
 
-                pix_count = target.size
+                pix_count = int(np.prod(target_size))
                 if pd.subimg[sd].shape[0] != pix_count:
                     raise ValueError("simulate_drawings:poolSizeMismatch Pool pixel dimension mismatch BEFORE write.")
 
-                scaled_vec = norm255(img_aligned.ravel(), vbl.rectify).astype(np.float64)
-                if scaled_vec.size != pix_count:
-                    raise ValueError("simulate_drawings:vectorLengthMismatch Vector length mismatch after warp.")
-
-                new_corr = fastcorr(target.ravel(), img_aligned.ravel())
-                new_ssim = _ssim_structure(img_aligned.reshape(target_size), target, 255)
+                scaled_vec = cand["scaled_vec"]
+                new_corr = cand["new_corr"]
+                new_ssim = cand["new_ssim"]
 
                 pool = pd.subimg[sd]
                 K = pool.shape[1]
@@ -474,9 +571,9 @@ def simulate_drawings(c_orig, v_orig, trl, tp, p_draw, vbl):
 
                 if new_corr > pd.corr[sd][ridx]:
                     pool[:, ridx] = scaled_vec
-                    pd.radius[sd][ridx] = c.e[0].radius
-                    pd.x[sd][ridx] = v.e[0].x
-                    pd.y[sd][ridx] = v.e[0].y
+                    pd.radius[sd][ridx] = radius
+                    pd.x[sd][ridx] = elec_x
+                    pd.y[sd][ridx] = elec_y
                     pd.corr[sd][ridx] = new_corr
                     pd.ssim[sd][ridx] = new_ssim
                     pd.subID[sd][ridx] = sd
