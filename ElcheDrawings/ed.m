@@ -765,20 +765,30 @@ classdef ed
             %   rand_combo_independent: matches combo_independent's
             %   non-nested "best of every combo of size c" real-side
             %   definition, for which a single well-defined "added
-            %   electrode" doesn't exist. For each c, ALL nchoosek(nCols,c)
-            %   combos are evaluated with their first (lowest-index) column
-            %   swapped for random, and the max across all of them is taken
-            %   per rep -- this reproduces the original (pre-redesign)
-            %   exhaustive-search null-model design. rand_combo_independent.win_mask{rep,c}
-            %   records which combo won, needed to reconstruct the image in
-            %   show_best_combos.
+            %   electrode" doesn't exist (the winning c-electrode combo need
+            %   not contain the winning (c-1)-electrode combo). For each c,
+            %   ONE random electrode is drawn per rep (not searched or
+            %   maximized), and combined with every possible (c-1)-sized
+            %   REAL background (all nchoosek(nCols,c-1) of them, skipping
+            %   any that already contain the drawn random electrode's
+            %   identity); the max correlation across those backgrounds is
+            %   taken. This is symmetric with how the real side (Step III)
+            %   is itself free to search over every possible background --
+            %   the null model gets that same freedom -- while the random
+            %   component is never searched/maximized, avoiding the
+            %   "weakening the null via search over many random draws"
+            %   problem of an earlier design. rand_combo_independent.win_mask{rep,c}
+            %   records the winning (c-1)-real background (all-false for
+            %   c=1, which has no background) and
+            %   rand_combo_independent.win_rand_slot(rep,c) records which
+            %   random electrode was drawn -- both needed to reconstruct
+            %   the image in show_best_combos.
             %
             % Cost note: rand_combo_greedy is cheap (maxC fits per rep).
-            % rand_combo_independent repeats the full nchoosek(nCols,c)
-            % search every rep (~2324 fits/rep for nCols=24, maxC=3, i.e.
-            % ~232k fits per drawing at R=100) -- still fast in absolute
-            % terms (small regressions), but meaningfully more than the
-            % greedy pathway.
+            % rand_combo_independent costs nchoosek(nCols,c-1) fits per
+            % (rep,c) -- e.g. 1 + 24 + 276 = 301 fits/rep for nCols=24,
+            % maxC=3 (i.e. ~30k fits per drawing at R=100), cheaper than an
+            % earlier design that searched nchoosek(nCols,c) combos instead.
             warning('off','MATLAB:rankDeficientMatrix');
 
             for d = 1:vbl.n_Drawings
@@ -816,19 +826,25 @@ classdef ed
                 rand_combo_greedy.ssim_val = NaN(R, maxC, 'single');
                 rand_combo_greedy.perms    = cell(R, 1);
 
-                rand_combo_independent.corr_val = NaN(R, maxC, 'single');
-                rand_combo_independent.ssim_val = NaN(R, maxC, 'single');
-                rand_combo_independent.win_mask = cell(R, maxC);
-                rand_combo_independent.perms    = cell(R, 1);
+                rand_combo_independent.corr_val    = NaN(R, maxC, 'single');
+                rand_combo_independent.ssim_val    = NaN(R, maxC, 'single');
+                rand_combo_independent.win_mask    = cell(R, maxC);
+                rand_combo_independent.win_rand_slot = NaN(R, maxC);
+                rand_combo_independent.perms       = cell(R, 1);
 
                 targetImg = single(sim_draw.patient_img{1});
                 target    = targetImg(:);
 
-                % Precompute the independent-search combo enumeration once
-                % (same for every rep)
-                indepCombos = cell(maxC, 1);
+                % Precompute the (c-1)-sized real-background enumeration
+                % once per c (same for every rep); index 1 is the trivial
+                % empty background for c=1.
+                bgCombos = cell(maxC, 1);
                 for c = 1:maxC
-                    indepCombos{c} = nchoosek(1:nCols, c);
+                    if c == 1
+                        bgCombos{c} = zeros(1, 0);  % one trivial empty background
+                    else
+                        bgCombos{c} = nchoosek(1:nCols, c-1);
+                    end
                 end
 
                 for rep = 1:R
@@ -876,20 +892,26 @@ classdef ed
                     end
                     rand_combo_greedy.perms{rep} = perms_rep;
 
-                    % ---- Independent: exhaustive search, first column randomized ----
+                    % ---- Independent: search over (c-1)-real backgrounds,
+                    % one (unsearched) random electrode per (rep,c) ----
                     for c = 1:maxC
-                        idxCombos = indepCombos{c};
-                        nThis = size(idxCombos, 1);
+                        rSlot = randi(nCols); % single random electrode for this (rep,c); NOT searched/maximized
+                        randCol = single(randimg_local(:, rSlot)) / 255;
+
+                        thisBgCombos = bgCombos{c};
+                        nThis = size(thisBgCombos, 1);
                         bestCorr = -Inf; bestSSIM = NaN; bestMask = false(1, nCols);
                         for k = 1:nThis
+                            bgIdx = thisBgCombos(k, :);
+                            if any(bgIdx == rSlot)
+                                continue; % background already contains this electrode identity
+                            end
                             mask = false(1, nCols);
-                            mask(idxCombos(k, :)) = true;
-                            X = single(tmp_model.subimg(:, mask)) / 255;
-
-                            firstCol = idxCombos(k, 1); % ascending row -> lowest-index electrode
-                            colsInMask = find(mask);
-                            firstPos = find(colsInMask == firstCol);
-                            X(:, firstPos) = single(randimg_local(:, firstCol)) / 255;
+                            mask(bgIdx) = true;
+                            % c=1: bgIdx is empty, mask stays all-false, and
+                            % X below reduces to just randCol (a single
+                            % random phosphene) -- the trivial one-background case.
+                            X = [single(tmp_model.subimg(:, mask)) / 255, randCol];
 
                             B = X \ target;
                             recon = X * B;
@@ -904,6 +926,7 @@ classdef ed
                         rand_combo_independent.corr_val(rep, c) = bestCorr;
                         rand_combo_independent.ssim_val(rep, c) = bestSSIM;
                         rand_combo_independent.win_mask{rep, c} = bestMask;
+                        rand_combo_independent.win_rand_slot(rep, c) = rSlot;
                     end
                     rand_combo_independent.perms{rep} = perms_rep;
                 end
@@ -1023,16 +1046,17 @@ classdef ed
 
             % Exactly one real winning combo per c, and its matched random
             % null distribution (one value per rep) -- no re-searching over
-            % multiple combos of the same size on either side (see
+            % which random electrode to use on either pathway (see
             % combine_sim_draws / combine_random_models). Under 'greedy',
             % the random side swaps the same fixed background's newly-added
-            % electrode; under 'independent', the random side's own winning
-            % combo (rand_combo.win_mask) is generally a DIFFERENT set of
-            % electrodes than combo.mask(c,:), since that pathway's null
-            % model is its own exhaustive search, not tied to the real
-            % side's specific winning combo. For this illustrative figure
-            % only, the rep with the highest random-swap correlation is
-            % shown (statistical comparison itself is done in
+            % electrode; under 'independent', the random side searches over
+            % which (c-1)-real background best complements ONE (unsearched)
+            % random electrode, so its winning background
+            % (rand_combo.win_mask) is generally a DIFFERENT set of
+            % electrodes than combo.mask(c,:) (the real side's own,
+            % independently-found winning c-combo). For this illustrative
+            % figure only, the rep with the highest random-swap correlation
+            % is shown (statistical comparison itself is done in
             % compare_real_vs_rand_stats, against the full per-rep
             % distribution, not just this best rep).
             maxC = numel(combo.corr_val);
@@ -1075,12 +1099,14 @@ classdef ed
                             X2 = single(tmp_model.subimg(:, mask)) / 255;
                             X2(:, addedPos) = single(randimg_local(:, addedCol)) / 255;
                         case 'independent'
+                            % win_mask is the winning (c-1)-electrode REAL
+                            % background (all-false for c=1); win_rand_slot
+                            % is the one (unsearched) random electrode
+                            % appended to it -- see combine_random_models.
                             winMask = rand_combo.win_mask{best_rep, c};
-                            firstCol = find(winMask, 1, 'first');
-                            colsInMask = find(winMask);
-                            firstPos = find(colsInMask == firstCol);
-                            X2 = single(tmp_model.subimg(:, winMask)) / 255;
-                            X2(:, firstPos) = single(randimg_local(:, firstCol)) / 255;
+                            winRandSlot = rand_combo.win_rand_slot(best_rep, c);
+                            X2 = [single(tmp_model.subimg(:, winMask)) / 255, ...
+                                  single(randimg_local(:, winRandSlot)) / 255];
                         otherwise
                             error('show_best_combos:unknownMethod', 'Unknown method: %s', method);
                     end
